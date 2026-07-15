@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -66,7 +67,8 @@ def build_parser() -> Parser:
     _start_parser(task.add_parser("start"), "Start a task and wait for its result.")
     _list_parser(task.add_parser("list"))
     _view_parser(task.add_parser("view"))
-    _thread_message(task.add_parser("steer"))
+    steer = _thread_message(task.add_parser("steer"))
+    steer.add_argument("--timeout", type=_positive_timeout, default=5)
     _thread_only(task.add_parser("interrupt"))
     resume = _thread_message(task.add_parser("resume"))
     _execution_flags(resume)
@@ -205,7 +207,7 @@ def _task(app: CodexAxi, args: argparse.Namespace, options: dict[str, Any]) -> d
     if args.action == "follow":
         return app.follow_task(args.thread, full=args.full, timeout=args.timeout)
     if args.action == "steer":
-        return app.steer(args.thread, args.message)
+        return app.steer(args.thread, args.message, timeout=args.timeout)
     if args.action == "interrupt":
         return app.interrupt(args.thread)
     if args.action == "resume":
@@ -246,6 +248,12 @@ def _execution_flags(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--approval", choices=("auto-review", "deny-all"), default="auto-review")
     parser.add_argument("--full", action="store_true")
+    parser.add_argument(
+        "--timeout",
+        type=_positive_timeout,
+        default=0,
+        help="Interrupt foreground work after this many seconds; 0 waits indefinitely.",
+    )
 
 
 def _message(parser: argparse.ArgumentParser) -> None:
@@ -282,7 +290,7 @@ def _view_parser(parser: argparse.ArgumentParser) -> None:
 def _options(args: argparse.Namespace) -> dict[str, Any]:
     return {
         key: getattr(args, key)
-        for key in ("cwd", "model", "effort", "sandbox", "approval", "full")
+        for key in ("cwd", "model", "effort", "sandbox", "approval", "full", "timeout")
         if hasattr(args, key)
     }
 
@@ -360,6 +368,13 @@ def _default(action: argparse.Action) -> Any:
     if isinstance(action.default, Path):
         return str(action.default)
     return action.default
+
+
+def _positive_timeout(value: str) -> float:
+    timeout = float(value)
+    if not math.isfinite(timeout) or timeout < 0:
+        raise argparse.ArgumentTypeError("timeout must be zero or greater")
+    return timeout
 
 
 def _leaf_parser(parser: Parser, args: argparse.Namespace) -> Parser:

@@ -142,12 +142,12 @@ class CodexAxi:
             turn = thread.turn(message, **self._turn_options(options))
             self.store.set_active_turn(thread.id, turn.id)
             try:
-                result = self._run_controlled(thread.id, turn)
+                result = self._run_controlled(thread.id, turn, timeout=options.get("timeout", 0))
             except BaseException as error:
                 self.store.update_task(
                     thread.id,
                     owner_pid=None,
-                    status="interrupted" if isinstance(error, KeyboardInterrupt) else "failed",
+                    status=_interruption_status(error),
                 )
                 raise
             finally:
@@ -175,11 +175,11 @@ class CodexAxi:
             turn = thread.turn(message, **self._turn_options(options))
             self.store.set_active_turn(thread.id, turn.id)
             try:
-                result = self._run_controlled(thread.id, turn)
+                result = self._run_controlled(thread.id, turn, timeout=options.get("timeout", 0))
             except BaseException as error:
                 values = {
                     "owner_pid": None,
-                    "status": "interrupted" if isinstance(error, KeyboardInterrupt) else "failed",
+                    "status": _interruption_status(error),
                 }
                 if self.store.worker(thread.id):
                     self.store.update_worker(thread.id, **values)
@@ -259,7 +259,7 @@ class CodexAxi:
                     json.dumps({"thread_id": thread.id, "turn_id": turn.id}) + "\n"
                 )
             try:
-                result = self._run_controlled(thread.id, turn)
+                result = self._run_controlled(thread.id, turn, timeout=options.get("timeout", 0))
                 self.store.set_active_turn(thread.id, None)
                 self.store.update_worker(
                     thread.id,
@@ -268,9 +268,11 @@ class CodexAxi:
                     final_response=result.final_response,
                     owner_pid=None,
                 )
-            except BaseException:
+            except BaseException as error:
                 self.store.set_active_turn(thread.id, None)
-                self.store.update_worker(thread.id, status="interrupted")
+                self.store.update_worker(
+                    thread.id, owner_pid=None, status=_interruption_status(error)
+                )
                 raise
         return self._result(thread.id, result, kind="worker", full=bool(options.get("full")))
 
@@ -427,9 +429,9 @@ class CodexAxi:
         )
         return {"worker": task}
 
-    def steer(self, thread_id: str, message: str) -> dict[str, Any]:
+    def steer(self, thread_id: str, message: str, *, timeout: float = 5) -> dict[str, Any]:
         turn_id = self._active_turn(thread_id)
-        self._send_control(thread_id, "steer", message)
+        self._send_control(thread_id, "steer", message, timeout=timeout)
         return {"task": {"id": thread_id, "turn_id": turn_id, "status": "steered"}}
 
     def interrupt(self, thread_id: str) -> dict[str, Any]:
@@ -532,10 +534,12 @@ class CodexAxi:
             return self.store.update_worker(thread_id, **values)
         return self.store.update_task(thread_id, **values)
 
-    def _send_control(self, thread_id: str, action: str, message: str | None = None) -> None:
+    def _send_control(
+        self, thread_id: str, action: str, message: str | None = None, *, timeout: float = 5
+    ) -> None:
         control_id = self.store.enqueue_control(thread_id, action, message)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
+        deadline = time.monotonic() + timeout if timeout else None
+        while deadline is None or time.monotonic() < deadline:
             result = self.store.control_result(control_id)
             if result:
                 if result["status"] == "applied":
@@ -552,7 +556,7 @@ class CodexAxi:
             f"Run `codex-axi task view {thread_id}` before retrying.",
         )
 
-    def _run_controlled(self, thread_id: str, turn: Any) -> Any:
+    def _run_controlled(self, thread_id: str, turn: Any, *, timeout: float = 0) -> Any:
         stop = threading.Event()
 
         def relay() -> None:
@@ -573,8 +577,38 @@ class CodexAxi:
 
         thread = threading.Thread(target=relay, name=f"codex-axi-control-{turn.id}", daemon=True)
         thread.start()
+        completed = threading.Event()
+        outcome: dict[str, Any] = {}
+
+        def collect() -> None:
+            try:
+                outcome["result"] = self._collect_turn(thread_id, turn)
+            except BaseException as error:
+                outcome["error"] = error
+            finally:
+                completed.set()
+
+        collector = threading.Thread(target=collect, name=f"codex-axi-turn-{turn.id}", daemon=True)
+        collector.start()
         try:
-            return self._collect_turn(thread_id, turn)
+            if not completed.wait(timeout if timeout > 0 else None):
+                try:
+                    turn.interrupt()
+                except Exception as error:
+                    raise AxiError(
+                        "turn_timeout",
+                        f"Task {thread_id} exceeded {timeout:g} seconds and could not be "
+                        "interrupted.",
+                        f"Run `codex-axi task view {thread_id}` before retrying.",
+                    ) from error
+                raise AxiError(
+                    "turn_timeout",
+                    f"Task {thread_id} exceeded {timeout:g} seconds and was interrupted.",
+                    f"Run `codex-axi task view {thread_id}` before retrying.",
+                )
+            if "error" in outcome:
+                raise outcome["error"]
+            return outcome["result"]
         finally:
             stop.set()
             thread.join(timeout=1)
@@ -686,6 +720,14 @@ def _enum(value: Any) -> Any:
     if isinstance(value, dict) and set(value) == {"type"}:
         return value["type"]
     return getattr(value, "value", value)
+
+
+def _interruption_status(error: BaseException) -> str:
+    if isinstance(error, (KeyboardInterrupt, AxiError)) and (
+        isinstance(error, KeyboardInterrupt) or error.code == "turn_timeout"
+    ):
+        return "interrupted"
+    return "failed"
 
 
 def _latest(thread: dict[str, Any], field: str) -> Any:

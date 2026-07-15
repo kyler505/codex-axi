@@ -130,6 +130,58 @@ def test_active_turn_control_is_applied_by_owner(tmp_path):
     assert not caller.is_alive()
 
 
+def test_foreground_timeout_interrupts_and_marks_task_interrupted(tmp_path):
+    service = app(tmp_path)
+    interrupted = threading.Event()
+
+    class Turn:
+        id = "turn-1"
+
+        def interrupt(self):
+            interrupted.set()
+
+    class Thread:
+        id = "thread-1"
+
+        def turn(self, message, **kwargs):
+            return Turn()
+
+    class Client:
+        def thread_start(self, **kwargs):
+            return Thread()
+
+        def close(self):
+            pass
+
+    @contextmanager
+    def client():
+        yield Client()
+
+    service.client = client
+    service._collect_turn = lambda _, __: interrupted.wait(1)
+    with pytest.raises(AxiError) as caught:
+        service.start_task("wait", timeout=0.01)
+    assert caught.value.code == "turn_timeout"
+    assert interrupted.is_set()
+    assert service.store.task("thread-1")["status"] == "interrupted"
+    assert service.store.active_turn("thread-1") is None
+
+
+def test_steer_uses_requested_control_timeout(tmp_path, monkeypatch):
+    service = app(tmp_path)
+    service.store.update_task("thread-1", kind="task", status="running")
+    service.store.set_active_turn("thread-1", "turn-1")
+    monkeypatch.setattr(service, "_reconcile_active", lambda _, metadata: metadata)
+    captured = {}
+    monkeypatch.setattr(
+        service,
+        "_send_control",
+        lambda thread, action, message, *, timeout: captured.update(timeout=timeout),
+    )
+    service.steer("thread-1", "change direction", timeout=0.25)
+    assert captured["timeout"] == 0.25
+
+
 def test_close_worker_is_idempotent_without_second_dependency_call(tmp_path, monkeypatch):
     service = app(tmp_path)
     service.store.update_worker("thread-1", kind="worker", status="closed")

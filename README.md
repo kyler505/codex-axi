@@ -82,6 +82,9 @@ guidance. Either may be used alone.
 # Foreground Codex task: waits for the final result.
 codex-axi task start --message "Review the parser" --sandbox read-only
 
+# Bound foreground work and interrupt its active turn on expiry.
+codex-axi task start --message "Review the parser" --sandbox read-only --timeout 120
+
 # Persistent worker: returns after dispatch so the caller can control it later.
 codex-axi worker start --background --role verifier \
   --message "Run the test suite and report one actionable failure"

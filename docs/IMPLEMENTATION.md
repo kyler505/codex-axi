@@ -58,6 +58,13 @@ SDK/runtime supports `account/rateLimits/read`. It never reads Codex's private
 state files. An unavailable rate-limit snapshot is explicit and should be
 treated as insufficient evidence for a caller that must gate dispatches.
 
+Foreground `task start`, `task resume`, and `worker start` accept `--timeout`
+to bound local waiting. On expiry, codex-axi interrupts the exact recorded
+turn, clears its active-turn metadata, persists `interrupted`, and returns a
+structured `turn_timeout` error. `task steer --timeout` bounds only the
+control acknowledgement wait because steering itself does not wait for turn
+completion.
+
 For lifecycle-specific verification, use the recovery, stale-turn, native
 delegation, ambient-context, and structured-output checks in
 [BENCHMARKS.md](BENCHMARKS.md).

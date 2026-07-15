@@ -1,4 +1,4 @@
-from codex_axi.cli import main
+from codex_axi.cli import build_parser, main
 from codex_axi.runtime import RuntimeCapabilities
 
 
@@ -31,3 +31,17 @@ def test_doctor_fails_when_codex_is_not_authenticated(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "authenticated: false" in output
     assert "status: unauthenticated" in output
+
+
+def test_foreground_commands_accept_timeout():
+    parser = build_parser()
+    start = parser.parse_args(["task", "start", "--message", "x", "--timeout", "12"])
+    resume = parser.parse_args(
+        ["task", "resume", "thread", "--message", "x", "--timeout", "12"]
+    )
+    steer = parser.parse_args(
+        ["task", "steer", "thread", "--message", "x", "--timeout", "2"]
+    )
+    assert start.timeout == 12
+    assert resume.timeout == 12
+    assert steer.timeout == 2
