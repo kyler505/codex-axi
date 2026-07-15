@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codex-axi"
+version = "0.1.0"
+description = "AXI-compliant control surface for Codex threads"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["openai-codex>=0.1.0b3,<0.2"]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "ruff>=0.15"]
+mcp = ["mcp>=1.0,<2"]
+
+[project.scripts]
+codex-axi = "codex_axi.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
