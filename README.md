@@ -100,6 +100,7 @@ codex-axi delegate --message "Delegate repository inspection when useful" --sand
 codex-axi agent list <root-thread>
 
 # Check the Codex runtime selected by the CLI.
+# This includes explicit authentication and current primary/secondary quota windows.
 codex-axi doctor
 codex-axi daemon status
 ```
@@ -118,7 +119,8 @@ new approval request.
 | `worker` | Start and control deterministic AXI-managed threads. |
 | `agent` | Inspect native Codex subagents attached to a root thread. |
 | `delegate` | Ask a root Codex task to delegate work natively. |
-| `doctor`, `daemon status` | Probe runtime and managed-daemon compatibility. |
+| `doctor` | Probe runtime compatibility, authentication, and current usage windows. |
+| `daemon status` | Probe managed-daemon compatibility. |
 | `setup hooks` | Install opt-in Claude Code, Codex, or OpenCode session hooks. |
 | `mcp-server` | Run the optional thin MCP adapter. |
 

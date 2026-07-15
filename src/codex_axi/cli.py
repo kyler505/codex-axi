@@ -11,7 +11,7 @@ from .app import CodexAxi
 from .errors import AxiError
 from .guidance import COMMANDS
 from .output import toon
-from .runtime import probe_runtime
+from .runtime import probe_runtime, read_rate_limits
 
 
 class Parser(argparse.ArgumentParser):
@@ -151,7 +151,14 @@ def main(argv: list[str] | None = None) -> int:
 
 def dispatch(args: argparse.Namespace) -> dict[str, Any]:
     caps = probe_runtime()
-    if args.command in {"doctor", "daemon"}:
+    if args.command == "doctor":
+        status = "unauthenticated" if caps.authenticated is False else caps.daemon_state
+        return {
+            "runtime": caps.document(),
+            "rate_limits": read_rate_limits(caps),
+            "status": status,
+        }
+    if args.command == "daemon":
         return {"runtime": caps.document(), "status": caps.daemon_state}
     if args.command == "setup":
         from .integrations import setup_hooks

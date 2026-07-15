@@ -2,7 +2,12 @@ import subprocess
 import sys
 import types
 
-from codex_axi.runtime import RuntimeCapabilities, open_proxy_connection, probe_runtime
+from codex_axi.runtime import (
+    RuntimeCapabilities,
+    open_proxy_connection,
+    probe_runtime,
+    read_rate_limits,
+)
 
 
 def completed(args, code=0, stdout="", stderr=""):
@@ -20,6 +25,62 @@ def test_probe_reports_stopped_daemon_without_claiming_health():
     assert result.proxy_available is True
     assert result.detail == "managed daemon is not running"
     assert "No such file" not in result.detail
+    assert result.authenticated is True
+
+
+def test_probe_reports_unauthenticated_codex():
+    def run(args):
+        if tuple(args[-2:]) == ("login", "status"):
+            return completed(args, 1, stderr="Not logged in")
+        if args[-1] == "version":
+            return completed(args, 1, stderr="failed to connect: No such file or directory")
+        return completed(args, stdout="codex-cli 0.144.3")
+
+    result = probe_runtime(run=run, which=lambda _: "/bin/codex")
+    assert result.authenticated is False
+
+
+def test_rate_limits_use_sdk_connection_and_normalize_windows(monkeypatch):
+    class Client:
+        class _client:
+            @staticmethod
+            def _request_raw(method, params):
+                assert method == "account/rateLimits/read"
+                assert params == {}
+                return {
+                    "rateLimits": {
+                        "primary": {
+                            "usedPercent": 12,
+                            "resetsAt": 1234,
+                            "windowDurationMins": 300,
+                        },
+                        "secondary": {"usedPercent": 34},
+                        "rateLimitReachedType": None,
+                    }
+                }
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("codex_axi.runtime.open_connection", lambda _: Client())
+    result = read_rate_limits(RuntimeCapabilities("/bin/codex", None, True, True, "healthy"))
+    assert result == {
+        "available": True,
+        "primary": {"used_percent": 12, "resets_at": 1234, "window_duration_mins": 300},
+        "secondary": {"used_percent": 34, "resets_at": None, "window_duration_mins": None},
+        "reached": None,
+    }
+
+
+def test_rate_limits_do_not_connect_when_unauthenticated(monkeypatch):
+    monkeypatch.setattr(
+        "codex_axi.runtime.open_connection", lambda _: (_ for _ in ()).throw(AssertionError())
+    )
+    result = read_rate_limits(
+        RuntimeCapabilities("/bin/codex", None, True, True, "healthy", authenticated=False)
+    )
+    assert result["available"] is False
+    assert result["detail"] == "Codex is not authenticated."
 
 
 def test_connection_uses_sdk_with_managed_proxy(monkeypatch):

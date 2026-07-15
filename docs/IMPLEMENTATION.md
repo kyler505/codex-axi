@@ -52,6 +52,12 @@ codex-axi daemon status
 codex-axi task start --message "Reply with OK" --sandbox read-only --approval deny-all
 ```
 
+`doctor` delegates authentication to `codex login status` and exposes the
+current Codex-owned primary and secondary quota snapshots when the installed
+SDK/runtime supports `account/rateLimits/read`. It never reads Codex's private
+state files. An unavailable rate-limit snapshot is explicit and should be
+treated as insufficient evidence for a caller that must gate dispatches.
+
 For lifecycle-specific verification, use the recovery, stale-turn, native
 delegation, ambient-context, and structured-output checks in
 [BENCHMARKS.md](BENCHMARKS.md).

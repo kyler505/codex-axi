@@ -26,6 +26,7 @@ class RuntimeCapabilities:
     detail: str | None = None
     sdk_version: str | None = None
     supported_codex: str = SUPPORTED_CODEX
+    authenticated: bool | None = None
 
     def document(self) -> dict[str, object]:
         return asdict(self)
@@ -36,6 +37,15 @@ Run = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
 def _run(args: Sequence[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, text=True, capture_output=True, check=False, timeout=10)
+
+
+def _login_status(codex_path: str, run: Run) -> bool | None:
+    """Return Codex's own non-interactive auth result without exposing credentials."""
+    try:
+        result = run((codex_path, "login", "status"))
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.returncode == 0
 
 
 def _proxy_handshake(codex_path: str) -> bool:
@@ -70,6 +80,7 @@ def probe_runtime(
         return RuntimeCapabilities(
             None, None, False, False, "unavailable", "`codex` is not on PATH", sdk_version
         )
+    authenticated = _login_status(codex_path, run)
     version = run((codex_path, "--version"))
     version_text = version.stdout.strip() if version.returncode == 0 else None
     match = re.search(r"(\d+)\.(\d+)\.(\d+)", version_text or "")
@@ -82,6 +93,7 @@ def probe_runtime(
             "version-mismatched",
             f"supported Codex range is {SUPPORTED_CODEX}",
             sdk_version,
+            authenticated=authenticated,
         )
     proxy = run((codex_path, "app-server", "proxy", "--help"))
     daemon = run((codex_path, "app-server", "daemon", "--help"))
@@ -94,6 +106,7 @@ def probe_runtime(
             "unavailable",
             None,
             sdk_version,
+            authenticated=authenticated,
         )
     status = run((codex_path, "app-server", "daemon", "version"))
     if status.returncode == 0:
@@ -108,6 +121,7 @@ def probe_runtime(
                     "version-mismatched",
                     "daemon and app-server versions do not match",
                     sdk_version,
+                    authenticated=authenticated,
                 )
         except json.JSONDecodeError:
             pass
@@ -120,6 +134,7 @@ def probe_runtime(
                 "unhealthy",
                 "app-server proxy did not complete the initialize handshake",
                 sdk_version,
+                authenticated=authenticated,
             )
         return RuntimeCapabilities(
             codex_path,
@@ -129,6 +144,7 @@ def probe_runtime(
             "healthy",
             "protocol handshake completed",
             sdk_version,
+            authenticated=authenticated,
         )
     raw_detail = (status.stderr or status.stdout).strip()
     lowered = raw_detail.lower()
@@ -143,7 +159,68 @@ def probe_runtime(
         "stopped": "managed daemon is not running",
         "unhealthy": "managed daemon health check failed",
     }[state]
-    return RuntimeCapabilities(codex_path, version_text, True, True, state, detail, sdk_version)
+    return RuntimeCapabilities(
+        codex_path,
+        version_text,
+        True,
+        True,
+        state,
+        detail,
+        sdk_version,
+        authenticated=authenticated,
+    )
+
+
+def read_rate_limits(capabilities: RuntimeCapabilities) -> dict[str, object]:
+    """Read current account quota via the official SDK connection.
+
+    The beta SDK has no public method for this endpoint. This narrow
+    compatibility call reuses its managed connection rather than creating a
+    second app-server client or reading Codex's private state files.
+    """
+    if not capabilities.codex_path:
+        return _rate_limits_unavailable("Codex CLI is unavailable.")
+    if capabilities.authenticated is False:
+        return _rate_limits_unavailable("Codex is not authenticated.")
+    try:
+        client = open_connection(capabilities)
+        try:
+            raw = client._client._request_raw("account/rateLimits/read", {})
+        finally:
+            client.close()
+    except Exception:
+        return _rate_limits_unavailable(
+            "This Codex SDK/runtime does not expose account rate-limit data."
+        )
+    if not isinstance(raw, dict) or not isinstance(raw.get("rateLimits"), dict):
+        return _rate_limits_unavailable(
+            "This Codex SDK/runtime returned an invalid rate-limit response."
+        )
+    snapshot = raw["rateLimits"]
+    return {
+        "available": True,
+        "primary": _rate_limit_window(snapshot.get("primary")),
+        "secondary": _rate_limit_window(snapshot.get("secondary")),
+        "reached": snapshot.get("rateLimitReachedType"),
+    }
+
+
+def _rate_limits_unavailable(detail: str) -> dict[str, object]:
+    return {
+        "available": False,
+        "detail": detail,
+        "help": "Update Codex and the openai-codex SDK together, then run `codex-axi doctor`.",
+    }
+
+
+def _rate_limit_window(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        "used_percent": value.get("usedPercent"),
+        "resets_at": value.get("resetsAt"),
+        "window_duration_mins": value.get("windowDurationMins"),
+    }
 
 
 def open_connection(capabilities: RuntimeCapabilities, *, require_shared: bool = False):

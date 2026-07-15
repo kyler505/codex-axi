@@ -1,4 +1,5 @@
 from codex_axi.cli import main
+from codex_axi.runtime import RuntimeCapabilities
 
 
 def test_unknown_flag_is_usage_error(capsys):
@@ -17,3 +18,16 @@ def test_help_is_structured_toon(capsys):
     assert "examples[2]:" in output
     assert "default" in output
     assert not output.endswith("\n")
+
+
+def test_doctor_fails_when_codex_is_not_authenticated(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "codex_axi.cli.probe_runtime",
+        lambda: RuntimeCapabilities(
+            "/bin/codex", "codex-cli 0.144.3", True, True, "healthy", authenticated=False
+        ),
+    )
+    assert main(["doctor"]) == 1
+    output = capsys.readouterr().out
+    assert "authenticated: false" in output
+    assert "status: unauthenticated" in output
