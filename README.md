@@ -22,6 +22,29 @@ codex-axi exposes two deliberately different concepts:
 
 Workers are never labeled as native subagents.
 
+## Dispatch benchmark
+
+In a local single-run probe on 2026-07-15, Claude Code was asked to launch
+the same harmless, read-only Codex prompt through each path. The prompt only
+returned `BENCHMARK_OK`; it did not use tools or change the repository.
+
+| Path | Claude dispatch-return time | Result | Control surface after dispatch |
+| --- | ---: | --- | --- |
+| Vanilla Claude Code → `codex exec --ephemeral` | 25.57s | Completed inline with `BENCHMARK_OK` | None: the caller waited for a one-shot process |
+| Claude Code → `codex-axi worker start --background` | 12.38s | Returned a running worker; it later completed with `BENCHMARK_OK` | Worker ID, follow, steer, interrupt, and close |
+
+The AXI path returned control to Claude Code **51.6% sooner** in this probe.
+This is directional evidence, not a general latency claim: it is one run on a
+specific machine and the two paths intentionally have different completion
+semantics. Vanilla `codex exec` blocks until completion; an AXI background
+worker acknowledges dispatch and lets the caller observe or control the work
+later. Neither row represents a native Codex subagent. Use `codex-axi agent`
+and `codex-axi delegate` when working with real parent-owned native subagents.
+
+See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for the repeatable latency
+protocol and lifecycle, recovery, native-delegation, ambient-context, safety,
+and structured-output demonstrations.
+
 ## Requirements
 
 - Python 3.10 or newer
