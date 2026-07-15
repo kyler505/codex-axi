@@ -8,14 +8,42 @@ version = "0.1.0"
 description = "AXI-compliant control surface for Codex threads"
 readme = "README.md"
 requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Kyler Cao", email = "kyler505@users.noreply.github.com" }]
+keywords = ["codex", "agents", "cli", "automation", "axi"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development",
+]
 dependencies = ["openai-codex>=0.1.0b3,<0.2"]
+
+[project.urls]
+Homepage = "https://github.com/kyler505/codex-axi"
+Documentation = "https://github.com/kyler505/codex-axi#readme"
+Issues = "https://github.com/kyler505/codex-axi/issues"
+Source = "https://github.com/kyler505/codex-axi"
 
 [project.optional-dependencies]
 test = ["pytest>=8", "ruff>=0.15"]
 mcp = ["mcp>=1.0,<2"]
+dev = ["pytest>=8", "ruff>=0.15", "build>=1.2", "twine>=6"]
 
 [project.scripts]
 codex-axi = "codex_axi.cli:main"
+
+[tool.hatch.build.targets.sdist]
+exclude = ["/AGENTS.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

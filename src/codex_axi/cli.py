@@ -38,7 +38,8 @@ class Parser(argparse.ArgumentParser):
                     "description": action.help or "",
                 }
             )
-        print(
+        destination = file or sys.stdout
+        destination.write(
             toon(
                 {
                     "command": self.prog,
@@ -47,8 +48,7 @@ class Parser(argparse.ArgumentParser):
                     "options": options,
                     "examples": _examples(self.prog),
                 }
-            ),
-            file=file or sys.stdout,
+            )
         )
 
 
@@ -127,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
             serve()
             return 0
         doc = dispatch(args)
-        print(toon(doc))
+        sys.stdout.write(toon(doc))
         if args.command in {"doctor", "daemon"} and doc["status"] not in {
             "healthy",
             "stopped",
@@ -135,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
     except AxiError as error:
-        print(toon(error.document()))
+        sys.stdout.write(toon(error.document()))
         return error.exit_code
     except SystemExit as error:
         return int(error.code)
@@ -145,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
             "Operation interrupted.",
             "Resume the task or worker using its thread ID.",
         )
-        print(toon(error.document()))
+        sys.stdout.write(toon(error.document()))
         return 1
 
 

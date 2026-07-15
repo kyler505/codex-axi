@@ -18,6 +18,8 @@ def test_probe_reports_stopped_daemon_without_claiming_health():
     result = probe_runtime(run=run, which=lambda _: "/bin/codex")
     assert result.daemon_state == "stopped"
     assert result.proxy_available is True
+    assert result.detail == "managed daemon is not running"
+    assert "No such file" not in result.detail
 
 
 def test_connection_uses_sdk_with_managed_proxy(monkeypatch):
@@ -49,6 +51,7 @@ def test_version_mismatch_is_distinct():
 
     result = probe_runtime(run=run, which=lambda _: "/bin/codex")
     assert result.daemon_state == "version-mismatched"
+    assert result.detail == "daemon and app-server versions do not match"
 
 
 def test_starting_daemon_is_distinct():

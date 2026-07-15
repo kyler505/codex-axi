@@ -106,7 +106,7 @@ def probe_runtime(
                     True,
                     True,
                     "version-mismatched",
-                    status.stdout.strip(),
+                    "daemon and app-server versions do not match",
                     sdk_version,
                 )
         except json.JSONDecodeError:
@@ -127,20 +127,23 @@ def probe_runtime(
             True,
             True,
             "healthy",
-            status.stdout.strip() or None,
+            "protocol handshake completed",
             sdk_version,
         )
-    detail = (status.stderr or status.stdout).strip()
-    lowered = detail.lower()
+    raw_detail = (status.stderr or status.stdout).strip()
+    lowered = raw_detail.lower()
     if "starting" in lowered:
         state = "starting"
     elif "no such file" in lowered or "failed to connect" in lowered:
         state = "stopped"
     else:
         state = "unhealthy"
-    return RuntimeCapabilities(
-        codex_path, version_text, True, True, state, detail or None, sdk_version
-    )
+    detail = {
+        "starting": "managed daemon is starting",
+        "stopped": "managed daemon is not running",
+        "unhealthy": "managed daemon health check failed",
+    }[state]
+    return RuntimeCapabilities(codex_path, version_text, True, True, state, detail, sdk_version)
 
 
 def open_connection(capabilities: RuntimeCapabilities, *, require_shared: bool = False):

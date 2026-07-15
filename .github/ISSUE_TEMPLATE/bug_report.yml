@@ -1,0 +1,34 @@
+name: Bug report
+description: Report a reproducible codex-axi problem
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, transcripts, or private repository content.
+  - type: input
+    id: version
+    attributes:
+      label: codex-axi version
+      placeholder: codex-axi 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Sanitized doctor output
+      description: Paste `codex-axi doctor` output after checking it for private paths.
+      render: text
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest command sequence that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true

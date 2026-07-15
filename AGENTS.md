@@ -1,6 +1,6 @@
 # Repository guidance
 
-Read `docs/SPEC.md` before making architectural or implementation decisions.
+Read `docs/ARCHITECTURE.md` before making architectural or implementation decisions.
 
 This is an agent-facing CLI. Follow the locally installed `axi` skill and the current TOON specification for stdout. Keep stdout structured and token-efficient; send diagnostics and progress to stderr.
 
@@ -14,4 +14,3 @@ Preserve the distinction between:
 Do not describe independent worker threads as native Codex subagents.
 
 Prefer narrow vertical slices with tests. Validate behavior against the installed Codex runtime, including protocol/version mismatches, daemon absence, stale active turns, and interrupted work.
-
