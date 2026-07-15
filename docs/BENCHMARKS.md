@@ -1,8 +1,10 @@
-# Benchmarks and comparison
+# Evaluation: dispatch and lifecycle control
 
-codex-axi is most useful when a caller needs to dispatch Codex work and retain
-a deterministic control surface afterwards. This document separates the
-one-shot launch comparison from demonstrations of that continuing control.
+`codex-axi` is useful when a caller needs to dispatch Codex work and retain a
+deterministic control surface afterward. These checks separate a one-shot local
+dispatch probe from repeatable demonstrations of lifecycle control. They are
+not a general performance benchmark and should not be read as a claim about
+Codex model latency.
 
 ## Terminology
 
