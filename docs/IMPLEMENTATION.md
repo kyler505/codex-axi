@@ -6,28 +6,35 @@ run `codex-axi doctor` on the target machine for the current result.
 
 ## Connection policy
 
-1. Probe the managed `openai-codex SDK -> codex app-server proxy -> daemon`
-   path with a protocol-level health check.
-2. Use that shared runtime when the check succeeds.
-3. Report the incompatibility when it fails.
-4. Use the SDK's supported direct app-server launch fallback only for
+1. Use `codex app-server daemon version` as the daemon's protocol-level health
+   check; Codex owns the Unix-socket WebSocket handshake used by that command.
+2. Track daemon health separately from whether the installed SDK can attach to
+   the shared control transport.
+3. Use the shared runtime only when both capabilities are available.
+4. Use the SDK's supported direct app-server launch fallback for
    non-shared operations where that does not imply cross-process live control.
 
 The CLI never implements, translates, or reverse engineers app-server protocol
 messages. The SDK remains the transport owner in either path.
 
-## Codex 0.144.3
+## Codex 0.144.x
 
-With Codex 0.144.3, `codex app-server daemon version` can succeed while a live
-initialize probe fails: the daemon control socket requires a WebSocket upgrade,
-`codex app-server proxy` is a raw byte relay, and the Python SDK uses
-newline-delimited JSON-RPC over stdio. This is a protocol mismatch, not proof
-that the daemon is unavailable.
+With Codex 0.144.3 and 0.144.4, `codex app-server daemon version` performs a
+real initialize exchange over the daemon's WebSocket control socket. A
+successful response is therefore authoritative daemon health, including when
+the managed process was started with `--remote-control`.
+
+The published `openai-codex` 0.1.0b3 SDK uses newline-delimited JSON-RPC over
+stdio. `codex app-server proxy` is a raw byte relay to a WebSocket-framed Unix
+socket, so selecting it through the SDK's command override does not create a
+compatible shared transport. `doctor` reports this separately as
+`shared_transport_available: false`; it does not call a remote-control daemon
+a competing process.
 
 For non-shared operations, `codex-axi` therefore uses the official SDK's direct
 app-server fallback. Active-turn control remains attached to the process that
 owns the public SDK `TurnHandle`; the CLI does not claim proxy-backed
-cross-process control when that health check has failed.
+cross-process control while shared attachment is unavailable.
 
 ## Historical native-agent hydration
 

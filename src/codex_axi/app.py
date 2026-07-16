@@ -484,6 +484,7 @@ class CodexAxi:
                 "transport": (
                     "managed-proxy"
                     if self.capabilities.daemon_state == "healthy"
+                    and self.capabilities.shared_transport_available
                     else "direct-fallback"
                 ),
             },

@@ -1,4 +1,4 @@
-"""Runtime discovery and the official SDK proxy connection path."""
+"""Runtime discovery and official SDK connection selection."""
 
 from __future__ import annotations
 
@@ -27,6 +27,8 @@ class RuntimeCapabilities:
     sdk_version: str | None = None
     supported_codex: str = SUPPORTED_CODEX
     authenticated: bool | None = None
+    shared_transport_available: bool = False
+    shared_transport_detail: str | None = None
 
     def document(self) -> dict[str, object]:
         return asdict(self)
@@ -48,28 +50,9 @@ def _login_status(codex_path: str, run: Run) -> bool | None:
     return result.returncode == 0
 
 
-def _proxy_handshake(codex_path: str) -> bool:
-    """A PID/version is insufficient: require a JSON-RPC response via proxy."""
-    request = (
-        '{"jsonrpc":"2.0","id":1,"method":"initialize","params":'
-        '{"clientInfo":{"name":"codex-axi","version":"0.1.0"},"capabilities":{}}}\n'
-    )
-    try:
-        result = subprocess.run(
-            (codex_path, "app-server", "proxy"),
-            input=request,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=3,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0 and '"id":1' in result.stdout and '"result"' in result.stdout
-
-
 def probe_runtime(
-    run: Run = _run, which: Callable[[str], str | None] = shutil.which
+    run: Run = _run,
+    which: Callable[[str], str | None] = shutil.which,
 ) -> RuntimeCapabilities:
     try:
         sdk_version = package_version("openai-codex")
@@ -108,6 +91,10 @@ def probe_runtime(
             sdk_version,
             authenticated=authenticated,
         )
+    shared_transport_detail = (
+        "installed Codex SDK supports direct stdio only; managed Unix WebSocket attachment "
+        "is unavailable"
+    )
     status = run((codex_path, "app-server", "daemon", "version"))
     if status.returncode == 0:
         try:
@@ -122,29 +109,20 @@ def probe_runtime(
                     "daemon and app-server versions do not match",
                     sdk_version,
                     authenticated=authenticated,
+                    shared_transport_detail=shared_transport_detail,
                 )
         except json.JSONDecodeError:
             pass
-        if run is _run and not _proxy_handshake(codex_path):
-            return RuntimeCapabilities(
-                codex_path,
-                version_text,
-                True,
-                True,
-                "unhealthy",
-                "app-server proxy did not complete the initialize handshake",
-                sdk_version,
-                authenticated=authenticated,
-            )
         return RuntimeCapabilities(
             codex_path,
             version_text,
             True,
             True,
             "healthy",
-            "protocol handshake completed",
+            "managed daemon protocol handshake completed",
             sdk_version,
             authenticated=authenticated,
+            shared_transport_detail=shared_transport_detail,
         )
     raw_detail = (status.stderr or status.stdout).strip()
     lowered = raw_detail.lower()
@@ -168,6 +146,7 @@ def probe_runtime(
         detail,
         sdk_version,
         authenticated=authenticated,
+        shared_transport_detail=shared_transport_detail,
     )
 
 
@@ -224,12 +203,18 @@ def _rate_limit_window(value: object) -> dict[str, object] | None:
 
 
 def open_connection(capabilities: RuntimeCapabilities, *, require_shared: bool = False):
-    """Create the SDK client, preferring the managed proxy when supported."""
+    """Create an SDK client using only a transport the installed SDK supports."""
     if not capabilities.codex_path:
         raise AxiError(
             "codex_missing",
             "Codex CLI is unavailable.",
             "Install Codex, then run `codex-axi doctor`.",
+        )
+    if require_shared and not capabilities.shared_transport_available:
+        raise AxiError(
+            "shared_transport_unavailable",
+            "This codex-axi runtime cannot attach to the managed Codex daemon.",
+            "Use direct task commands; managed live control requires a compatible runtime.",
         )
     if require_shared and capabilities.daemon_state != "healthy":
         raise AxiError(
@@ -240,7 +225,7 @@ def open_connection(capabilities: RuntimeCapabilities, *, require_shared: bool =
     try:
         from openai_codex import Codex, CodexConfig
 
-        if capabilities.proxy_available and capabilities.daemon_state == "healthy":
+        if capabilities.shared_transport_available and capabilities.daemon_state == "healthy":
             config = CodexConfig(
                 codex_bin=capabilities.codex_path,
                 launch_args_override=(capabilities.codex_path, "app-server", "proxy"),

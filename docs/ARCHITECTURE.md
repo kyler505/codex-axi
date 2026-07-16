@@ -47,12 +47,12 @@ only relationships Codex actually reports.
 
 ## Runtime selection
 
-The managed daemon and proxy are probed first. When their protocol-level health
-check succeeds, short-lived CLI invocations use that shared runtime. If the
-installed Codex version cannot support it, the CLI reports the limitation and
-uses the SDK's direct app-server fallback only for operations that do not claim
-cross-process live control. Closing a CLI invocation closes its SDK connection,
-not the shared daemon.
+The managed daemon is probed through Codex's protocol-level health check. A
+healthy daemon is used as a shared runtime only when the installed SDK also
+supports its control transport. Otherwise, the CLI reports the transport
+limitation separately and uses the SDK's direct app-server fallback for
+operations that do not claim daemon-backed control. Closing a CLI invocation
+closes its SDK connection, not the shared daemon.
 
 The precise version-specific behavior belongs in
 [Implementation notes](IMPLEMENTATION.md), not in the command contract.
