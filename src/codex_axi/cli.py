@@ -337,9 +337,7 @@ def _view_parser(parser: argparse.ArgumentParser) -> None:
 def _options(args: argparse.Namespace) -> dict[str, Any]:
     return {
         key: getattr(args, key)
-        for key in (
-            "cwd", "model", "effort", "sandbox", "approval", "full", "timeout", "events"
-        )
+        for key in ("cwd", "model", "effort", "sandbox", "approval", "full", "timeout", "events")
         if hasattr(args, key)
     }
 

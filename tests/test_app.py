@@ -691,9 +691,7 @@ def test_events_reports_definitive_not_captured_state(tmp_path):
 
 def test_new_turn_without_capture_clears_stale_event_metadata(tmp_path):
     service = app(tmp_path)
-    service.store.update_task(
-        "thread-1", event_log="/tmp/old.jsonl", event_turn_id="old-turn"
-    )
+    service.store.update_task("thread-1", event_log="/tmp/old.jsonl", event_turn_id="old-turn")
 
     assert service._prepare_events("thread-1", "new-turn", "task", {}) is None
     metadata = service.store.task("thread-1")

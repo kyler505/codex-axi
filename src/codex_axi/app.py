@@ -154,9 +154,7 @@ class CodexAxi:
 
         def running() -> bool:
             current = (
-                self.store.worker(thread_id)
-                if kind == "worker"
-                else self.store.task(thread_id)
+                self.store.worker(thread_id) if kind == "worker" else self.store.task(thread_id)
             )
             return bool(current and current.get("status") == "running")
 
