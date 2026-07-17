@@ -51,6 +51,63 @@ def test_task_list_passes_cwd_filter_by_default(tmp_path):
     assert "cwd" not in captured
 
 
+def test_task_list_prefers_tracked_outcome_over_sdk_load_state(tmp_path):
+    service = app(tmp_path)
+    service.store.update_task("thread-1", kind="task", status="completed")
+
+    class Client:
+        def thread_list(self, **kwargs):
+            return SimpleNamespace(
+                data=[SimpleNamespace(id="thread-1", name="done", status="notLoaded")],
+                next_cursor=None,
+            )
+
+        def close(self):
+            pass
+
+    @contextmanager
+    def fake_client():
+        yield Client()
+
+    service.client = fake_client
+    assert service.list_tasks()["tasks"][0]["status"] == "completed"
+
+
+def test_task_view_prefers_tracked_outcome_over_sdk_load_state(tmp_path, monkeypatch):
+    service = app(tmp_path)
+    service.store.update_task("thread-1", kind="task", status="interrupted")
+
+    @contextmanager
+    def fake_client():
+        yield object()
+
+    service.client = fake_client
+    monkeypatch.setattr(
+        "codex_axi.app.read_thread_compat",
+        lambda *_: {
+            "id": "thread-1",
+            "status": "notLoaded",
+            "turns": [],
+        },
+    )
+    assert service.view_task("thread-1")["task"]["status"] == "interrupted"
+
+
+def test_task_view_uses_sdk_status_for_untracked_thread(tmp_path, monkeypatch):
+    service = app(tmp_path)
+
+    @contextmanager
+    def fake_client():
+        yield object()
+
+    service.client = fake_client
+    monkeypatch.setattr(
+        "codex_axi.app.read_thread_compat",
+        lambda *_: {"id": "external", "status": "notLoaded", "turns": []},
+    )
+    assert service.view_task("external")["task"]["status"] == "notLoaded"
+
+
 def test_stale_turn_is_rejected_before_dependency_call(tmp_path):
     with pytest.raises(AxiError) as caught:
         app(tmp_path).interrupt("missing")

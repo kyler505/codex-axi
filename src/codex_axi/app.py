@@ -40,8 +40,8 @@ class CodexAxi:
         self.capabilities = capabilities or probe_runtime()
 
     @contextmanager
-    def client(self, *, require_shared: bool = False) -> Iterator[Any]:
-        client = open_connection(self.capabilities, require_shared=require_shared)
+    def client(self) -> Iterator[Any]:
+        client = open_connection(self.capabilities)
         try:
             yield client
         except AxiError:
@@ -82,7 +82,7 @@ class CodexAxi:
             "task": {
                 "id": data["id"],
                 "name": data.get("name"),
-                "status": _enum(data.get("status")),
+                "status": metadata.get("status", _enum(data.get("status"))),
                 "cwd": data.get("cwd"),
                 "preview": body,
                 "final_response": final_shown,
@@ -690,10 +690,11 @@ class CodexAxi:
 
     def _thread_summary(self, thread: Any) -> dict[str, Any]:
         data = model_dict(thread)
+        metadata = self.store.task(data["id"]) or self.store.worker(data["id"]) or {}
         return {
             "id": data["id"],
             "name": data.get("name") or data.get("preview", "")[:80],
-            "status": _enum(data.get("status")),
+            "status": metadata.get("status", _enum(data.get("status"))),
             "parent_thread_id": data.get("parent_thread_id"),
         }
 

@@ -202,25 +202,13 @@ def _rate_limit_window(value: object) -> dict[str, object] | None:
     }
 
 
-def open_connection(capabilities: RuntimeCapabilities, *, require_shared: bool = False):
+def open_connection(capabilities: RuntimeCapabilities):
     """Create an SDK client using only a transport the installed SDK supports."""
     if not capabilities.codex_path:
         raise AxiError(
             "codex_missing",
             "Codex CLI is unavailable.",
             "Install Codex, then run `codex-axi doctor`.",
-        )
-    if require_shared and not capabilities.shared_transport_available:
-        raise AxiError(
-            "shared_transport_unavailable",
-            "This codex-axi runtime cannot attach to the managed Codex daemon.",
-            "Use direct task commands; managed live control requires a compatible runtime.",
-        )
-    if require_shared and capabilities.daemon_state != "healthy":
-        raise AxiError(
-            "shared_runtime_required",
-            "This operation requires the managed Codex daemon.",
-            "Update Codex and run `codex app-server daemon start`.",
         )
     try:
         from openai_codex import Codex, CodexConfig
