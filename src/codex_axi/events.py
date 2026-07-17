@@ -51,6 +51,8 @@ class EventJournal:
 
         if event.method not in VISIBLE_EVENT_METHODS:
             return
+        if event.method in ("item/started", "item/completed") and _is_reasoning_item(event.payload):
+            return
         try:
             self._sequence += 1
             payload = event.payload
@@ -107,6 +109,16 @@ def _decode_record(line: str) -> dict[str, Any]:
             "Start a new turn with `--events` to create a fresh journal.",
         )
     return record
+
+
+def _is_reasoning_item(payload: Any) -> bool:
+    item = payload.get("item") if isinstance(payload, dict) else getattr(payload, "item", None)
+    if item is None:
+        return False
+    item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+    if isinstance(item_type, Enum):
+        item_type = item_type.value
+    return item_type == "reasoning"
 
 
 def _json_value(value: Any) -> Any:
