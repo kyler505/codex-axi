@@ -30,6 +30,12 @@ def test_journal_captures_allowlisted_events_and_ignores_reasoning(tmp_path):
     records = read_events(journal.path)
     assert [record["sequence"] for record in records] == [1, 2]
     assert all(record["schema_version"] == EVENT_SCHEMA_VERSION for record in records)
+    assert [record["method"] for record in records] == [
+        "turn/started",
+        "item/commandExecution/outputDelta",
+    ]
+    assert "private" not in journal.path.read_text()
+    assert journal.path.stat().st_mode & 0o777 == 0o600
 
 
 def test_journal_excludes_reasoning_items_from_generic_envelopes(tmp_path):
@@ -46,8 +52,6 @@ def test_journal_excludes_reasoning_items_from_generic_envelopes(tmp_path):
     records = read_events(journal.path)
     assert [record["sequence"] for record in records] == [1]
     assert records[0]["payload"]["item"]["type"] == "message"
-    assert "private" not in journal.path.read_text()
-    assert journal.path.stat().st_mode & 0o777 == 0o600
 
 
 def test_read_events_supports_cursor_and_limit(tmp_path):
