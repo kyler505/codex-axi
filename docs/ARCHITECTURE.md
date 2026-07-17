@@ -27,10 +27,13 @@ and reuses the CLI application behavior.
 | Codex thread and turn history | Codex persisted thread data |
 | Thread and turn operations | Official `openai-codex` SDK |
 | Worker relationship, label, workspace, safety options, active-turn identity | Minimal local `codex-axi` metadata |
+| Opt-in live event journal | Local `codex-axi` event file owned by the turn process |
 | Agent-facing command contract | `codex-axi` CLI |
 
 Local metadata is reconciled with the Codex runtime after interruption or
 restart. It is coordination state, not a shadow copy of Codex history.
+Event journals are likewise an optional observability surface, not an alternate
+Codex thread store.
 
 ## Tasks, workers, and native subagents
 
@@ -70,6 +73,12 @@ start/resume
   -> run or acknowledge work
   -> reconcile terminal state and clear active turn ID
 ```
+
+The process that owns the SDK `TurnHandle` is also the only consumer of its
+notification stream. When event capture is requested, that process passively
+appends an allow-listed subset to a user-private journal. Other CLI processes
+read or follow the journal; they never attach a second consumer to the SDK
+stream. Journal failures do not alter turn completion or the control relay.
 
 ## Agent-facing contract
 

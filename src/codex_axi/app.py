@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .errors import AxiError, translate_runtime_error
+from .events import EventJournal, follow_events, read_events
 from .output import preview
 from .runtime import RuntimeCapabilities, open_connection, probe_runtime, read_thread_compat
 from .state import StateStore
@@ -117,6 +118,58 @@ class CodexAxi:
                 )
             time.sleep(0.2)
 
+    def events(
+        self, thread_id: str, *, kind: str = "task", since: int = 0, limit: int = 100
+    ) -> dict[str, Any]:
+        metadata = self._event_metadata(thread_id, kind)
+        path = metadata.get("event_log")
+        if not path:
+            return {
+                "count": 0,
+                "events": [],
+                "status": "not_captured",
+                "help": ["Start a new turn with `--events` to capture live events."],
+            }
+        matching = read_events(Path(path), since=since, limit=10**9)
+        records = matching[-limit:]
+        return {
+            "returned": len(records),
+            "total": len(matching),
+            "has_more": len(matching) > len(records),
+            "turn_id": metadata.get("event_turn_id"),
+            "events": records,
+        }
+
+    def event_stream(
+        self, thread_id: str, *, kind: str = "task", since: int = 0
+    ) -> Iterator[dict[str, Any]]:
+        metadata = self._event_metadata(thread_id, kind)
+        path = metadata.get("event_log")
+        if not path:
+            raise AxiError(
+                "events_not_captured",
+                f"No events were captured for {kind} {thread_id}.",
+                "Start a new turn with `--events` and retry.",
+            )
+
+        def running() -> bool:
+            current = (
+                self.store.worker(thread_id) if kind == "worker" else self.store.task(thread_id)
+            )
+            return bool(current and current.get("status") == "running")
+
+        yield from follow_events(Path(path), since=since, running=running)
+
+    def _event_metadata(self, thread_id: str, kind: str) -> dict[str, Any]:
+        metadata = self.store.worker(thread_id) if kind == "worker" else self.store.task(thread_id)
+        if metadata is None:
+            raise AxiError(
+                f"{kind}_not_found",
+                f"{kind.title()} {thread_id} is not managed by codex-axi.",
+                f"Run `codex-axi {kind} list`.",
+            )
+        return metadata
+
     def view_agent(self, thread_id: str, *, full: bool = False) -> dict[str, Any]:
         result = self.view_task(thread_id, full=full)
         if not result["task"].get("parent_thread_id"):
@@ -141,9 +194,12 @@ class CodexAxi:
                 status="running",
             )
             turn = thread.turn(message, **self._turn_options(options))
+            journal = self._prepare_events(thread.id, turn.id, "task", options)
             self.store.set_active_turn(thread.id, turn.id)
             try:
-                result = self._run_controlled(thread.id, turn, timeout=options.get("timeout", 0))
+                result = self._run_controlled(
+                    thread.id, turn, timeout=options.get("timeout", 0), journal=journal
+                )
             except BaseException as error:
                 self.store.update_task(
                     thread.id,
@@ -174,9 +230,13 @@ class CodexAxi:
                     thread.id, **metadata, owner_pid=os.getpid(), status="running"
                 )
             turn = thread.turn(message, **self._turn_options(options))
+            kind = "worker" if self.store.worker(thread.id) else "task"
+            journal = self._prepare_events(thread.id, turn.id, kind, options)
             self.store.set_active_turn(thread.id, turn.id)
             try:
-                result = self._run_controlled(thread.id, turn, timeout=options.get("timeout", 0))
+                result = self._run_controlled(
+                    thread.id, turn, timeout=options.get("timeout", 0), journal=journal
+                )
             except BaseException as error:
                 values = {
                     "owner_pid": None,
@@ -267,6 +327,7 @@ class CodexAxi:
                 client, developer_instructions=_worker_instructions(role), **options
             )
             turn = thread.turn(message, **self._turn_options(options))
+            journal = self._prepare_events(thread.id, turn.id, "worker", options)
             self.store.set_active_turn(thread.id, turn.id)
             self.store.update_worker(
                 thread.id,
@@ -290,7 +351,9 @@ class CodexAxi:
                     json.dumps({"thread_id": thread.id, "turn_id": turn.id}) + "\n"
                 )
             try:
-                result = self._run_controlled(thread.id, turn, timeout=options.get("timeout", 0))
+                result = self._run_controlled(
+                    thread.id, turn, timeout=options.get("timeout", 0), journal=journal
+                )
                 self.store.set_active_turn(thread.id, None)
                 self.store.update_worker(
                     thread.id,
@@ -451,6 +514,13 @@ class CodexAxi:
                 'Start a new worker with `codex-axi worker start --message "<task>"`.',
             )
         if self.store.active_turn(thread_id):
+            if options.get("events") and not worker.get("event_log"):
+                raise AxiError(
+                    "events_require_new_turn",
+                    "Event capture cannot be enabled after a worker turn has started.",
+                    f"Interrupt {thread_id}, then send new work with `--events`.",
+                    2,
+                )
             result = self.steer(thread_id, message)
             return {"worker": result["task"]}
         preserved = {
@@ -619,7 +689,14 @@ class CodexAxi:
             f"Run `codex-axi task view {thread_id}` before retrying.",
         )
 
-    def _run_controlled(self, thread_id: str, turn: Any, *, timeout: float = 0) -> Any:
+    def _run_controlled(
+        self,
+        thread_id: str,
+        turn: Any,
+        *,
+        timeout: float = 0,
+        journal: EventJournal | None = None,
+    ) -> Any:
         stop = threading.Event()
 
         def relay() -> None:
@@ -645,7 +722,10 @@ class CodexAxi:
 
         def collect() -> None:
             try:
-                outcome["result"] = self._collect_turn(thread_id, turn)
+                if journal is None:
+                    outcome["result"] = self._collect_turn(thread_id, turn)
+                else:
+                    outcome["result"] = self._collect_turn(thread_id, turn, journal=journal)
             except BaseException as error:
                 outcome["error"] = error
             finally:
@@ -676,13 +756,17 @@ class CodexAxi:
             stop.set()
             thread.join(timeout=1)
 
-    def _collect_turn(self, thread_id: str, turn: Any) -> Any:
+    def _collect_turn(
+        self, thread_id: str, turn: Any, *, journal: EventJournal | None = None
+    ) -> Any:
         from openai_codex import TurnResult
 
         completed = None
         items = []
         usage = None
         for event in turn.stream():
+            if journal is not None:
+                journal.emit(event)
             payload = event.payload
             if event.method == "turn/started" and getattr(payload, "turn", None):
                 started_id = payload.turn.id
@@ -719,6 +803,24 @@ class CodexAxi:
             items=items,
             usage=usage,
         )
+
+    def _prepare_events(
+        self, thread_id: str, turn_id: str, kind: str, options: dict[str, Any]
+    ) -> EventJournal | None:
+        journal = (
+            EventJournal.create(self.store.path, thread_id, turn_id)
+            if options.get("events")
+            else None
+        )
+        values = {
+            "event_log": str(journal.path) if journal else None,
+            "event_turn_id": turn_id if journal else None,
+        }
+        if kind == "worker":
+            self.store.update_worker(thread_id, **values)
+        else:
+            self.store.update_task(thread_id, **values)
+        return journal
 
     def _start_thread(self, client: Any, **options: Any) -> Any:
         return client.thread_start(

@@ -72,6 +72,16 @@ structured `turn_timeout` error. `task steer --timeout` bounds only the
 control acknowledgement wait because steering itself does not wait for turn
 completion.
 
+Turn event capture is opt-in through `--events`. The SDK connection that owns
+the active `TurnHandle` writes selected notifications to a mode-`0600` NDJSON
+journal under the codex-axi state directory. `task events` and `worker events`
+read that journal; `--follow --json` streams one complete JSON event per line.
+Reasoning deltas are not recorded. The event sink is deliberately passive, so
+serialization or filesystem failures cannot fail the turn or interfere with
+timeout, steer, or interrupt timing.
+Event envelopes use schema version `1`, payload records are bounded to 64 KiB,
+and each NDJSON line is flushed atomically from the owning process.
+
 For lifecycle-specific verification, use the recovery, stale-turn, native
 delegation, ambient-context, and structured-output checks in
 [BENCHMARKS.md](BENCHMARKS.md).

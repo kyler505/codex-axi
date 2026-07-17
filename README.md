@@ -90,8 +90,9 @@ codex-axi task start --message "Review the parser" --sandbox read-only
 codex-axi task start --message "Review the parser" --sandbox read-only --timeout 120
 
 # Persistent worker: returns after dispatch so the caller can control it later.
-codex-axi worker start --background --role verifier \
+codex-axi worker start --background --events --role verifier \
   --message "Run the test suite and report one actionable failure"
+codex-axi worker events <thread> --follow --json
 codex-axi worker follow <thread> --timeout 60
 codex-axi worker send <thread> --message "Now inspect only the parser tests"
 codex-axi worker interrupt <thread>
@@ -135,6 +136,32 @@ Use `codex-axi <command> --help` for supported flags, defaults, and examples.
 Unknown flags fail before a runtime call with exit status `2`; command errors
 remain structured on stdout so agents can recover without parsing dependency
 output.
+
+### Live turn events
+
+Event capture is opt-in. Add `--events` to `task start`, `task resume`,
+`worker start`, or `worker send` to write a user-private local journal for that
+turn. Snapshot commands preserve the normal TOON contract:
+
+```sh
+codex-axi task events <thread>
+codex-axi worker events <thread> --since 20 --limit 100
+```
+
+For a live stream, use explicit JSON framing. Each stdout line is one complete
+event and its `sequence` can be supplied to `--since` when reconnecting:
+
+```sh
+codex-axi worker events <thread> --follow --json
+```
+
+The stream includes lifecycle, plan, command-output, file-change, MCP progress,
+warning, and agent-message events. Reasoning deltas are deliberately excluded.
+Because command and file-change payloads may contain sensitive data, journals
+should be enabled only when the caller intends to retain that local output.
+Event capture is passive: a journal failure cannot fail a Codex turn or delay
+steer, interrupt, or timeout handling. `follow` remains the command for waiting
+on the final result; `events` is for incremental visibility.
 
 ## Workers are not native subagents
 

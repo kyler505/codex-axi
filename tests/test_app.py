@@ -644,3 +644,56 @@ def test_turn_started_event_confirms_active_identifier(tmp_path):
     result = service._collect_turn("thread-1", Turn())
     assert service.store.active_turn("thread-1") == "turn-1"
     assert result.final_response == "done"
+
+
+def test_turn_event_capture_is_passive(tmp_path):
+    service = app(tmp_path)
+    emitted = []
+    agent_item = SimpleNamespace(type="agentMessage", phase="final_answer", text="done")
+    completed_turn = SimpleNamespace(
+        id="turn-1",
+        status="completed",
+        error=None,
+        started_at=1,
+        completed_at=2,
+        duration_ms=1,
+    )
+
+    class Journal:
+        def emit(self, event):
+            emitted.append(event.method)
+
+    class Turn:
+        id = "turn-1"
+
+        def stream(self):
+            yield SimpleNamespace(
+                method="item/completed",
+                payload=SimpleNamespace(turn_id="turn-1", item=agent_item),
+            )
+            yield SimpleNamespace(
+                method="turn/completed", payload=SimpleNamespace(turn=completed_turn)
+            )
+
+    result = service._collect_turn("thread-1", Turn(), journal=Journal())
+    assert emitted == ["item/completed", "turn/completed"]
+    assert result.final_response == "done"
+
+
+def test_events_reports_definitive_not_captured_state(tmp_path):
+    service = app(tmp_path)
+    service.store.update_task("thread-1", kind="task", status="completed")
+
+    result = service.events("thread-1")
+    assert result["count"] == 0
+    assert result["status"] == "not_captured"
+
+
+def test_new_turn_without_capture_clears_stale_event_metadata(tmp_path):
+    service = app(tmp_path)
+    service.store.update_task("thread-1", event_log="/tmp/old.jsonl", event_turn_id="old-turn")
+
+    assert service._prepare_events("thread-1", "new-turn", "task", {}) is None
+    metadata = service.store.task("thread-1")
+    assert metadata["event_log"] is None
+    assert metadata["event_turn_id"] is None

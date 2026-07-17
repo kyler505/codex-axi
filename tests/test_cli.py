@@ -87,3 +87,27 @@ def test_foreground_commands_accept_timeout():
     assert start.timeout == 12
     assert resume.timeout == 12
     assert steer.timeout == 2
+
+
+def test_event_capture_and_follow_flags():
+    parser = build_parser()
+    start = parser.parse_args(["worker", "start", "--message", "x", "--events"])
+    events = parser.parse_args(
+        ["worker", "events", "thread", "--follow", "--since", "4", "--limit", "20"]
+    )
+    assert start.events is True
+    assert events.follow is True
+    assert events.since == 4
+    assert events.limit == 20
+
+
+def test_event_follow_requires_json_before_runtime(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "codex_axi.cli.probe_runtime", lambda: pytest.fail("runtime must not be probed")
+    )
+    assert main(["task", "events", "thread", "--follow"]) == 2
+    assert "--follow` requires `--json" in capsys.readouterr().out
+
+
+def test_event_cursor_rejects_negative_values():
+    assert main(["task", "events", "thread", "--since", "-1"]) == 2
