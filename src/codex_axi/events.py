@@ -42,8 +42,8 @@ class EventJournal:
         directory = state_path.parent / "events"
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{thread_id}.{turn_id}.jsonl"
-        path.write_text("")
-        os.chmod(path, 0o600)
+        fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+        os.close(fd)
         return cls(path)
 
     def emit(self, event: Any) -> None:
