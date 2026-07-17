@@ -701,17 +701,14 @@ def test_new_turn_without_capture_clears_stale_event_metadata(tmp_path):
 
 def test_event_journal_creation_failure_is_passive(tmp_path, monkeypatch):
     service = app(tmp_path)
-    service.store.update_task(
-        "thread-1", event_log="/tmp/stale.jsonl", event_turn_id="old-turn"
-    )
+    service.store.update_task("thread-1", event_log="/tmp/stale.jsonl", event_turn_id="old-turn")
+
     def fail_creation(*_args):
         raise OSError("disk full")
 
     monkeypatch.setattr("codex_axi.app.EventJournal.create", fail_creation)
 
-    journal = service._prepare_events(
-        "thread-1", "new-turn", "task", {"events": True}
-    )
+    journal = service._prepare_events("thread-1", "new-turn", "task", {"events": True})
 
     assert journal is None
     metadata = service.store.task("thread-1")
