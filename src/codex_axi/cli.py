@@ -75,6 +75,7 @@ def build_parser() -> Parser:
     resume = _thread_message(task.add_parser("resume"))
     _execution_flags(resume)
     _thread_only(task.add_parser("archive"))
+    _events_parser(task.add_parser("events"))
     _thread_only(task.add_parser("follow"))
     task.choices["follow"].add_argument("--full", action="store_true")
     task.choices["follow"].add_argument("--timeout", type=float, default=0)
@@ -89,9 +90,13 @@ def build_parser() -> Parser:
     start_worker.add_argument("--background", action="store_true")
     _list_parser(worker.add_parser("list"))
     _view_parser(worker.add_parser("view"))
-    _thread_message(worker.add_parser("send"))
+    send_worker = _thread_message(worker.add_parser("send"))
+    send_worker.add_argument(
+        "--events", action="store_true", help="capture a local event journal for this turn"
+    )
     _thread_only(worker.add_parser("interrupt"))
     _thread_only(worker.add_parser("close"))
+    _events_parser(worker.add_parser("events"))
     _thread_only(worker.add_parser("follow"))
     worker.choices["follow"].add_argument("--full", action="store_true")
     worker.choices["follow"].add_argument("--timeout", type=float, default=0)
@@ -146,6 +151,22 @@ def main(argv: list[str] | None = None) -> int:
             from .mcp import serve
 
             serve()
+            return 0
+        if args.command in {"task", "worker"} and args.action == "events" and args.follow:
+            if not json_output:
+                raise AxiError(
+                    "invalid_usage",
+                    "`--follow` requires `--json` so each event has an unambiguous frame.",
+                    f"Run `codex-axi {args.command} events {args.thread} --follow --json`.",
+                    2,
+                )
+            app = CodexAxi(capabilities=probe_runtime())
+            try:
+                for event in app.event_stream(args.thread, kind=args.command, since=args.since):
+                    sys.stdout.write(json.dumps(event, separators=(",", ":")) + "\n")
+                    sys.stdout.flush()
+            except BrokenPipeError:
+                return 0
             return 0
         doc = dispatch(args)
         emit(doc)
@@ -233,6 +254,8 @@ def _task(app: CodexAxi, args: argparse.Namespace, options: dict[str, Any]) -> d
         return app.resume_task(args.thread, args.message, **options)
     if args.action == "archive":
         return app.archive_task(args.thread)
+    if args.action == "events":
+        return app.events(args.thread, since=args.since, limit=args.limit)
     raise AssertionError(args.action)
 
 
@@ -247,12 +270,14 @@ def _worker(app: CodexAxi, args: argparse.Namespace, options: dict[str, Any]) ->
     if args.action == "follow":
         return app.follow_worker(args.thread, full=args.full, timeout=args.timeout)
     if args.action == "send":
-        return app.send_worker(args.thread, args.message)
+        return app.send_worker(args.thread, args.message, **options)
     if args.action == "interrupt":
         result = app.interrupt(args.thread)
         return {"worker": result["task"]}
     if args.action == "close":
         return app.close_worker(args.thread)
+    if args.action == "events":
+        return app.events(args.thread, kind="worker", since=args.since, limit=args.limit)
     raise AssertionError(args.action)
 
 
@@ -267,6 +292,9 @@ def _execution_flags(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--approval", choices=("auto-review", "deny-all"), default="auto-review")
     parser.add_argument("--full", action="store_true")
+    parser.add_argument(
+        "--events", action="store_true", help="capture a local event journal for this turn"
+    )
     parser.add_argument(
         "--timeout",
         type=_positive_timeout,
@@ -309,9 +337,25 @@ def _view_parser(parser: argparse.ArgumentParser) -> None:
 def _options(args: argparse.Namespace) -> dict[str, Any]:
     return {
         key: getattr(args, key)
-        for key in ("cwd", "model", "effort", "sandbox", "approval", "full", "timeout")
+        for key in (
+            "cwd", "model", "effort", "sandbox", "approval", "full", "timeout", "events"
+        )
         if hasattr(args, key)
     }
+
+
+def _events_parser(parser: argparse.ArgumentParser) -> None:
+    _thread_only(parser)
+    parser.add_argument("--since", type=_nonnegative_integer, default=0)
+    parser.add_argument("--limit", type=_positive_limit, default=100)
+    parser.add_argument("--follow", action="store_true")
+
+
+def _nonnegative_integer(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("sequence must be zero or greater")
+    return parsed
 
 
 def _display_path(path: Path) -> str:
@@ -343,6 +387,10 @@ def _examples(prog: str) -> list[str]:
             "codex-axi task follow <thread>",
             "codex-axi task follow <thread> --timeout 60",
         ],
+        "task events": [
+            "codex-axi task events <thread>",
+            "codex-axi task events <thread> --follow --json",
+        ],
         "worker start": [
             'codex-axi worker start --background --message "Run tests" --role verifier',
             'codex-axi worker start --message "Review code" --sandbox read-only',
@@ -356,6 +404,10 @@ def _examples(prog: str) -> list[str]:
         "worker follow": [
             "codex-axi worker follow <thread>",
             "codex-axi worker follow <thread> --timeout 60",
+        ],
+        "worker events": [
+            "codex-axi worker events <thread>",
+            "codex-axi worker events <thread> --follow --json",
         ],
         "worker interrupt": [
             "codex-axi worker interrupt <thread>",
