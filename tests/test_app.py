@@ -1,3 +1,4 @@
+import os
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -51,9 +52,10 @@ def test_task_list_passes_cwd_filter_by_default(tmp_path):
     assert "cwd" not in captured
 
 
-def test_task_list_prefers_tracked_outcome_over_sdk_load_state(tmp_path):
+@pytest.mark.parametrize("outcome", ["completed", "interrupted", "failed", "running"])
+def test_task_list_prefers_tracked_outcome_over_sdk_load_state(tmp_path, outcome):
     service = app(tmp_path)
-    service.store.update_task("thread-1", kind="task", status="completed")
+    service.store.update_task("thread-1", kind="task", status=outcome)
 
     class Client:
         def thread_list(self, **kwargs):
@@ -70,7 +72,7 @@ def test_task_list_prefers_tracked_outcome_over_sdk_load_state(tmp_path):
         yield Client()
 
     service.client = fake_client
-    assert service.list_tasks()["tasks"][0]["status"] == "completed"
+    assert service.list_tasks()["tasks"][0]["status"] == outcome
 
 
 def test_task_view_prefers_tracked_outcome_over_sdk_load_state(tmp_path, monkeypatch):
@@ -106,6 +108,132 @@ def test_task_view_uses_sdk_status_for_untracked_thread(tmp_path, monkeypatch):
         lambda *_: {"id": "external", "status": "notLoaded", "turns": []},
     )
     assert service.view_task("external")["task"]["status"] == "notLoaded"
+
+
+def test_task_view_reconciles_stale_running_status_from_turn_history(tmp_path, monkeypatch):
+    service = app(tmp_path)
+    service.store.update_task("thread-1", kind="task", status="running", owner_pid=1)
+    service.store.set_active_turn("thread-1", "turn-1")
+
+    @contextmanager
+    def fake_client():
+        yield object()
+
+    service.client = fake_client
+    monkeypatch.setattr(
+        "codex_axi.app.read_thread_compat",
+        lambda *_: {
+            "id": "thread-1",
+            "status": "notLoaded",
+            "turns": [{"id": "turn-1", "status": "failed"}],
+        },
+    )
+    assert service.view_task("thread-1")["task"]["status"] == "failed"
+    assert service.store.task("thread-1")["status"] == "failed"
+    assert service.store.active_turn("thread-1") is None
+
+
+def test_task_view_prefers_newer_turn_outcome_over_old_metadata(tmp_path, monkeypatch):
+    service = app(tmp_path)
+    service.store.update_task("thread-1", kind="task", status="completed")
+
+    @contextmanager
+    def fake_client():
+        yield object()
+
+    service.client = fake_client
+    monkeypatch.setattr(
+        "codex_axi.app.read_thread_compat",
+        lambda *_: {
+            "id": "thread-1",
+            "status": "notLoaded",
+            "turns": [{"id": "turn-2", "status": "interrupted"}],
+        },
+    )
+    assert service.view_task("thread-1")["task"]["status"] == "interrupted"
+
+
+def test_task_list_reconciles_active_tasks_on_single_connection(tmp_path, monkeypatch):
+    service = app(tmp_path)
+    for index in (1, 2):
+        thread_id = f"thread-{index}"
+        service.store.update_task(thread_id, kind="task", status="running", owner_pid=1)
+        service.store.set_active_turn(thread_id, f"turn-{index}")
+
+    connections = 0
+
+    class Client:
+        def thread_list(self, **kwargs):
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(id=f"thread-{index}", status="notLoaded") for index in (1, 2)
+                ],
+                next_cursor=None,
+            )
+
+        def close(self):
+            pass
+
+    @contextmanager
+    def fake_client():
+        nonlocal connections
+        connections += 1
+        yield Client()
+
+    service.client = fake_client
+    monkeypatch.setattr(
+        "codex_axi.app.read_thread_compat",
+        lambda _, thread_id: {
+            "id": thread_id,
+            "turns": [
+                {
+                    "id": f"turn-{thread_id.rsplit('-', 1)[-1]}",
+                    "status": "completed",
+                }
+            ],
+        },
+    )
+
+    result = service.list_tasks()
+    assert connections == 1
+    assert [task["status"] for task in result["tasks"]] == ["completed", "completed"]
+    assert service.store.active_turn("thread-1") is None
+    assert service.store.active_turn("thread-2") is None
+
+
+def test_task_list_keeps_metadata_when_shared_reconciliation_read_fails(tmp_path, monkeypatch):
+    service = app(tmp_path)
+    service.store.update_task("thread-1", kind="task", status="running", owner_pid=os.getpid())
+    service.store.set_active_turn("thread-1", "turn-1")
+    connections = 0
+
+    class Client:
+        def thread_list(self, **kwargs):
+            return SimpleNamespace(
+                data=[SimpleNamespace(id="thread-1", status="notLoaded")],
+                next_cursor=None,
+            )
+
+        def close(self):
+            pass
+
+    @contextmanager
+    def fake_client():
+        nonlocal connections
+        connections += 1
+        yield Client()
+
+    service.client = fake_client
+
+    def fail_read(*_):
+        raise RuntimeError("SDK read failed")
+
+    monkeypatch.setattr("codex_axi.app.read_thread_compat", fail_read)
+
+    result = service.list_tasks()
+    assert connections == 1
+    assert result["tasks"][0]["status"] == "running"
+    assert service.store.active_turn("thread-1") == "turn-1"
 
 
 def test_stale_turn_is_rejected_before_dependency_call(tmp_path):

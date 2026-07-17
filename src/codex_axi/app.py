@@ -61,7 +61,7 @@ class CodexAxi:
 
                 kwargs["cwd"] = ThreadListCwdFilter(root=str(self.cwd))
             response = client.thread_list(**kwargs)
-        rows = [self._thread_summary(thread) for thread in response.data]
+            rows = [self._thread_summary(thread, client=client) for thread in response.data]
         result = {
             "returned": len(rows),
             "total": None,
@@ -82,7 +82,7 @@ class CodexAxi:
             "task": {
                 "id": data["id"],
                 "name": data.get("name"),
-                "status": metadata.get("status", _enum(data.get("status"))),
+                "status": self._task_status(data, metadata),
                 "cwd": data.get("cwd"),
                 "preview": body,
                 "final_response": final_shown,
@@ -506,16 +506,27 @@ class CodexAxi:
             )
         return turn_id
 
-    def _reconcile_active(self, thread_id: str, metadata: dict[str, Any]) -> dict[str, Any]:
+    def _reconcile_active(
+        self,
+        thread_id: str,
+        metadata: dict[str, Any],
+        *,
+        thread: dict[str, Any] | None = None,
+        client: Any | None = None,
+    ) -> dict[str, Any]:
         turn_id = self.store.active_turn(thread_id)
         owner_pid = metadata.get("owner_pid") or metadata.get("pid")
-        try:
-            with self.client() as client:
-                thread = read_thread_compat(client, thread_id)
-        except AxiError:
-            if owner_pid and not _pid_alive(owner_pid):
-                return self._finish_reconciliation(thread_id, metadata, "interrupted")
-            return metadata
+        if thread is None:
+            try:
+                if client is not None:
+                    thread = read_thread_compat(client, thread_id)
+                else:
+                    with self.client() as connection:
+                        thread = read_thread_compat(connection, thread_id)
+            except Exception:
+                if owner_pid and not _pid_alive(owner_pid):
+                    return self._finish_reconciliation(thread_id, metadata, "interrupted")
+                return metadata
         matching = next(
             (turn for turn in thread.get("turns", []) if turn.get("id") == turn_id), None
         )
@@ -688,15 +699,26 @@ class CodexAxi:
             result["effort"] = options["effort"]
         return result
 
-    def _thread_summary(self, thread: Any) -> dict[str, Any]:
+    def _thread_summary(self, thread: Any, *, client: Any) -> dict[str, Any]:
         data = model_dict(thread)
         metadata = self.store.task(data["id"]) or self.store.worker(data["id"]) or {}
+        if metadata.get("status") == "running" and self.store.active_turn(data["id"]):
+            metadata = self._reconcile_active(data["id"], metadata, client=client)
         return {
             "id": data["id"],
             "name": data.get("name") or data.get("preview", "")[:80],
-            "status": metadata.get("status", _enum(data.get("status"))),
+            "status": self._task_status(data, metadata),
             "parent_thread_id": data.get("parent_thread_id"),
         }
+
+    def _task_status(self, thread: dict[str, Any], metadata: dict[str, Any]) -> Any:
+        """Prefer meaningful runtime state, then the outcome codex-axi persisted."""
+        if metadata.get("status") == "running" and self.store.active_turn(thread["id"]):
+            metadata = self._reconcile_active(thread["id"], metadata, thread=thread)
+        runtime_status = _enum(_latest(thread, "status")) or _enum(thread.get("status"))
+        if runtime_status not in {None, "notLoaded"}:
+            return runtime_status
+        return metadata.get("status", runtime_status)
 
     def _result(
         self, thread_id: str, result: Any, *, kind: str = "task", full: bool = False
