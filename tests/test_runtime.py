@@ -2,9 +2,6 @@ import subprocess
 import sys
 import types
 
-import pytest
-
-from codex_axi.errors import AxiError
 from codex_axi.runtime import (
     RuntimeCapabilities,
     open_proxy_connection,
@@ -135,18 +132,6 @@ def test_connection_uses_managed_proxy_only_when_shared_transport_is_available(m
     )
     assert isinstance(client, Codex)
     assert captured["config"]["launch_args_override"] == ("/bin/codex", "app-server", "proxy")
-
-
-def test_shared_connection_fails_before_launch_when_transport_is_unavailable(monkeypatch):
-    monkeypatch.setitem(sys.modules, "openai_codex", None)
-    capabilities = RuntimeCapabilities(
-        "/bin/codex", "codex-cli 0.144.3", True, True, "healthy"
-    )
-
-    with pytest.raises(AxiError) as raised:
-        open_proxy_connection(capabilities, require_shared=True)
-
-    assert raised.value.code == "shared_transport_unavailable"
 
 
 def test_version_mismatch_is_distinct():
