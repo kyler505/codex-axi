@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,8 @@ from .errors import AxiError
 from .guidance import COMMANDS
 from .output import toon
 from .runtime import probe_runtime, read_rate_limits
+
+_JSON_OUTPUT = False
 
 
 class Parser(argparse.ArgumentParser):
@@ -40,23 +44,21 @@ class Parser(argparse.ArgumentParser):
                 }
             )
         destination = file or sys.stdout
-        destination.write(
-            toon(
-                {
-                    "command": self.prog,
-                    "description": self.description or "",
-                    "usage": self.format_usage().strip(),
-                    "options": options,
-                    "examples": _examples(self.prog),
-                }
-            )
-        )
+        document = {
+            "command": self.prog,
+            "description": self.description or "",
+            "usage": self.format_usage().strip(),
+            "options": options,
+            "examples": _examples(self.prog),
+        }
+        destination.write(_serialize(document))
 
 
 def build_parser() -> Parser:
     parser = Parser(
         prog="codex-axi", description="Control Codex tasks, workers, and native agents."
     )
+    parser.add_argument("--json", action="store_true", help="emit JSON instead of TOON")
     subs = parser.add_subparsers(dest="command", parser_class=Parser)
     subs.add_parser("doctor", help="probe runtime compatibility")
     daemon = subs.add_parser("daemon", help="inspect the managed daemon")
@@ -109,9 +111,26 @@ def build_parser() -> Parser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    global _JSON_OUTPUT
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    configured_output = os.environ.get("CODEX_AXI_OUTPUT")
+    json_output = "--json" in raw_argv or configured_output == "json"
+    _JSON_OUTPUT = json_output
+    raw_argv = [argument for argument in raw_argv if argument != "--json"]
+
+    def emit(document: dict[str, Any]) -> None:
+        sys.stdout.write(_serialize(document))
+
     try:
+        if configured_output not in {None, "toon", "json"}:
+            raise AxiError(
+                "invalid_usage",
+                f"Unsupported CODEX_AXI_OUTPUT value: {configured_output}.",
+                "Set CODEX_AXI_OUTPUT to `toon` or `json`.",
+                2,
+            )
         parser = build_parser()
-        args, unknown = parser.parse_known_args(argv)
+        args, unknown = parser.parse_known_args(raw_argv)
         if unknown:
             leaf = _leaf_parser(parser, args)
             valid = ", ".join(
@@ -129,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
             serve()
             return 0
         doc = dispatch(args)
-        sys.stdout.write(toon(doc))
+        emit(doc)
         if args.command in {"doctor", "daemon"} and doc["status"] not in {
             "healthy",
             "stopped",
@@ -137,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
     except AxiError as error:
-        sys.stdout.write(toon(error.document()))
+        emit(error.document())
         return error.exit_code
     except SystemExit as error:
         return int(error.code)
@@ -147,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
             "Operation interrupted.",
             "Resume the task or worker using its thread ID.",
         )
-        sys.stdout.write(toon(error.document()))
+        emit(error.document())
         return 1
 
 
@@ -238,7 +257,7 @@ def _worker(app: CodexAxi, args: argparse.Namespace, options: dict[str, Any]) ->
 
 
 def _execution_flags(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--cwd", type=Path, default=Path.cwd())
+    parser.add_argument("--cwd", type=_existing_directory, default=Path.cwd())
     parser.add_argument("--model")
     parser.add_argument("--effort", choices=("minimal", "low", "medium", "high", "xhigh"))
     parser.add_argument(
@@ -278,7 +297,7 @@ def _start_parser(parser: argparse.ArgumentParser, description: str) -> None:
 
 def _list_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--all-workspaces", action="store_true")
-    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--limit", type=_positive_limit, default=100)
     parser.add_argument("--archived", action="store_true")
 
 
@@ -375,6 +394,28 @@ def _positive_timeout(value: str) -> float:
     if not math.isfinite(timeout) or timeout < 0:
         raise argparse.ArgumentTypeError("timeout must be zero or greater")
     return timeout
+
+
+def _positive_limit(value: str) -> int:
+    limit = int(value)
+    if limit < 1:
+        raise argparse.ArgumentTypeError("limit must be one or greater")
+    return limit
+
+
+def _existing_directory(value: str) -> Path:
+    path = Path(value).expanduser().resolve()
+    if not path.exists():
+        raise argparse.ArgumentTypeError(f"cwd does not exist: {path}")
+    if not path.is_dir():
+        raise argparse.ArgumentTypeError(f"cwd is not a directory: {path}")
+    return path
+
+
+def _serialize(document: dict[str, Any]) -> str:
+    if _JSON_OUTPUT:
+        return json.dumps(document, ensure_ascii=False, separators=(",", ":"))
+    return toon(document)
 
 
 def _leaf_parser(parser: Parser, args: argparse.Namespace) -> Parser:

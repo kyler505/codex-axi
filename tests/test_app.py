@@ -449,6 +449,170 @@ def test_reconciliation_uses_runtime_turn_status(tmp_path, monkeypatch):
     assert service.store.active_turn("thread-1") is None
 
 
+def test_reconciliation_keeps_live_owner_authoritative(tmp_path, monkeypatch):
+    service = app(tmp_path)
+    service.store.update_worker(
+        "thread-1", kind="worker", status="running", owner_pid=os.getpid(), cwd="/repo"
+    )
+    service.store.set_active_turn("thread-1", "turn-1")
+    monkeypatch.setattr(
+        "codex_axi.app.read_thread_compat",
+        lambda *_: pytest.fail("live owner should not be reconciled through another runtime"),
+    )
+
+    result = service._reconcile_active("thread-1", service.store.worker("thread-1"))
+
+    assert result["status"] == "running"
+    assert service.store.active_turn("thread-1") == "turn-1"
+
+
+def test_reconciliation_uses_dead_lease_when_runtime_read_fails(tmp_path, monkeypatch):
+    service = app(tmp_path)
+    service.store.update_worker(
+        "thread-1",
+        kind="worker",
+        status="running",
+        owner_pid=os.getpid(),
+        pid=os.getpid(),
+        background=True,
+        runner_lease=str(tmp_path / "inactive.lease"),
+        cwd="/repo",
+    )
+    service.store.set_active_turn("thread-1", "turn-1")
+
+    @contextmanager
+    def failed_client():
+        raise RuntimeError("read failed")
+        yield
+
+    service.client = failed_client
+    result = service._reconcile_active("thread-1", service.store.worker("thread-1"))
+
+    assert result["status"] == "interrupted"
+    assert service.store.active_turn("thread-1") is None
+
+
+def test_close_worker_interrupts_then_confirms_background_process_exit(tmp_path, monkeypatch):
+    service = app(tmp_path)
+    service.store.update_worker(
+        "thread-1",
+        kind="worker",
+        status="running",
+        owner_pid=4321,
+        pid=4321,
+        background=True,
+        runner_lease="/tmp/runner.lease",
+        cwd="/repo",
+    )
+    service.store.set_active_turn("thread-1", "turn-1")
+    controls = []
+    monkeypatch.setattr(
+        service,
+        "_send_control",
+        lambda thread, action: controls.append((thread, action)),
+    )
+    monkeypatch.setattr("codex_axi.app._wait_pid_exit", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("codex_axi.app._runner_lease_active", lambda _path: True)
+
+    class Client:
+        def thread_archive(self, thread_id):
+            assert thread_id == "thread-1"
+
+        def close(self):
+            pass
+
+    @contextmanager
+    def fake_client():
+        yield Client()
+
+    service.client = fake_client
+    result = service.close_worker("thread-1")
+
+    assert controls == [("thread-1", "interrupt")]
+    assert result["worker"]["status"] == "closed"
+    assert service.store.worker("thread-1")["status"] == "closed"
+
+
+def test_close_completed_worker_never_acts_on_historical_pid(tmp_path, monkeypatch):
+    service = app(tmp_path)
+    service.store.update_worker(
+        "thread-1",
+        kind="worker",
+        status="completed",
+        owner_pid=None,
+        pid=4321,
+        background=True,
+        cwd="/repo",
+    )
+    monkeypatch.setattr(
+        "codex_axi.app._wait_pid_exit",
+        lambda *_args, **_kwargs: pytest.fail("historical PID must not be inspected"),
+    )
+    monkeypatch.setattr(
+        "codex_axi.app._runner_lease_active",
+        lambda _path: pytest.fail("completed worker lease must not be inspected"),
+    )
+
+    class Client:
+        def thread_archive(self, thread_id):
+            assert thread_id == "thread-1"
+
+        def close(self):
+            pass
+
+    @contextmanager
+    def fake_client():
+        yield Client()
+
+    service.client = fake_client
+    assert service.close_worker("thread-1")["worker"]["status"] == "closed"
+
+
+def test_close_fails_truthfully_when_runner_does_not_exit(tmp_path, monkeypatch):
+    service = app(tmp_path)
+    service.store.update_worker(
+        "thread-1",
+        kind="worker",
+        status="running",
+        owner_pid=4321,
+        pid=4321,
+        background=True,
+        runner_lease="/tmp/runner.lease",
+        cwd="/repo",
+    )
+    service.store.set_active_turn("thread-1", "turn-1")
+    monkeypatch.setattr(service, "_send_control", lambda *_args: None)
+    monkeypatch.setattr("codex_axi.app._runner_lease_active", lambda _path: True)
+    monkeypatch.setattr("codex_axi.app._wait_pid_exit", lambda *_args, **_kwargs: False)
+
+    with pytest.raises(AxiError) as caught:
+        service.close_worker("thread-1")
+
+    assert caught.value.code == "worker_close_failed"
+    assert service.store.worker("thread-1")["status"] == "close_failed"
+
+
+def test_close_archive_failure_is_recoverable(tmp_path):
+    service = app(tmp_path)
+    service.store.update_worker("thread-1", kind="worker", status="completed", cwd="/repo")
+
+    class Client:
+        def thread_archive(self, thread_id):
+            raise RuntimeError("archive failed")
+
+        def close(self):
+            pass
+
+    @contextmanager
+    def fake_client():
+        yield Client()
+
+    service.client = fake_client
+    with pytest.raises(RuntimeError, match="archive failed"):
+        service.close_worker("thread-1")
+    assert service.store.worker("thread-1")["status"] == "close_failed"
+
+
 def test_turn_started_event_confirms_active_identifier(tmp_path):
     service = app(tmp_path)
     agent_item = SimpleNamespace(type="agentMessage", phase="final_answer", text="done")

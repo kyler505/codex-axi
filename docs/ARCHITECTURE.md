@@ -75,7 +75,8 @@ start/resume
 
 The command line follows AXI conventions:
 
-- stdout is structured, token-efficient TOON: data, errors, and actionable help.
+- stdout is structured, token-efficient TOON by default: data, errors, and
+  actionable help. Callers can explicitly select JSON without changing schemas.
 - stderr is for diagnostics and progress only.
 - exit `0` means success, including an idempotent no-op; `1` is an operational
   error; `2` is invalid usage.

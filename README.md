@@ -6,8 +6,8 @@ Interface).
 `codex-axi` gives another agent a compact, scriptable control surface for Codex
 threads: dispatch work, retain a stable thread identity, observe progress,
 steer an active turn, and resume it later. It uses token-efficient
-[TOON](https://toonformat.dev/) on stdout, keeps diagnostics on stderr, and
-returns structured, actionable errors.
+[TOON](https://toonformat.dev/) on stdout by default, keeps diagnostics on
+stderr, and returns structured, actionable errors.
 
 It uses the official `openai-codex` Python SDK and the managed Codex
 app-server runtime. It does not replace Codex's safety model, transport, or
@@ -54,6 +54,10 @@ The skill is the recommended on-demand discovery path, but it is not required.
 Any capable agent can call the CLI directly after installation. The no-argument
 dashboard shows current-workspace state and next-step commands; each command
 also has concise TOON `--help` output.
+
+Use `--json` anywhere in a command, or set `CODEX_AXI_OUTPUT=json`, when an
+integration needs standard JSON. Successes and structured errors use the same
+fields in both formats.
 
 ```sh
 codex-axi task list

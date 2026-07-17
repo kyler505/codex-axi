@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import subprocess
@@ -219,8 +220,34 @@ class CodexAxi:
             )
         if worker.get("status") == "closed":
             return {"worker": {"id": thread_id, "status": "already_closed"}}
-        with self.client() as client:
-            client.thread_archive(thread_id)
+        if self.store.active_turn(thread_id):
+            worker = self._reconcile_active(thread_id, worker)
+        self.store.update_worker(thread_id, status="closing")
+        turn_id = self.store.active_turn(thread_id)
+        try:
+            if turn_id:
+                self._send_control(thread_id, "interrupt")
+        except BaseException:
+            self.store.update_worker(thread_id, status="running")
+            raise
+        pid = worker.get("owner_pid")
+        if worker.get("background") and (
+            pid != worker.get("pid") or not _runner_lease_active(worker.get("runner_lease"))
+        ):
+            pid = None
+        if pid and not _wait_pid_exit(pid, timeout=8):
+            self.store.update_worker(thread_id, status="close_failed")
+            raise AxiError(
+                "worker_close_failed",
+                f"Worker {thread_id} did not stop.",
+                f"Inspect PID {pid} and retry `codex-axi worker close {thread_id}`.",
+            )
+        try:
+            with self.client() as client:
+                client.thread_archive(thread_id)
+        except BaseException:
+            self.store.update_worker(thread_id, status="close_failed")
+            raise
         self.store.set_active_turn(thread_id, None)
         self.store.update_worker(thread_id, status="closed", active_turn_id=None)
         return {"worker": {"id": thread_id, "status": "closed"}}
@@ -232,6 +259,7 @@ class CodexAxi:
         role: str | None = None,
         label: str | None = None,
         _rendezvous: Path | None = None,
+        _runner_lease: Path | None = None,
         **options: Any,
     ) -> dict[str, Any]:
         with self.client() as client:
@@ -253,6 +281,9 @@ class CodexAxi:
                 approval=options.get("approval", "auto-review"),
                 model=options.get("model"),
                 effort=options.get("effort"),
+                background=_runner_lease is not None,
+                pid=os.getpid() if _runner_lease else None,
+                runner_lease=str(_runner_lease) if _runner_lease else None,
             )
             if _rendezvous:
                 _rendezvous.write_text(
@@ -267,11 +298,15 @@ class CodexAxi:
                     status=_enum(result.status),
                     final_response=result.final_response,
                     owner_pid=None,
+                    pid=None,
                 )
             except BaseException as error:
                 self.store.set_active_turn(thread.id, None)
                 self.store.update_worker(
-                    thread.id, owner_pid=None, status=_interruption_status(error)
+                    thread.id,
+                    owner_pid=None,
+                    pid=None,
+                    status=_interruption_status(error),
                 )
                 raise
         return self._result(thread.id, result, kind="worker", full=bool(options.get("full")))
@@ -286,6 +321,7 @@ class CodexAxi:
         request_path = Path(request_name)
         rendezvous = request_path.with_suffix(".ready.json")
         log_path = request_path.with_suffix(".log")
+        lease_path = request_path.with_suffix(".lease")
         payload = {
             "message": message,
             "role": role,
@@ -297,6 +333,7 @@ class CodexAxi:
             "state": str(self.store.path),
             "cwd": str(self.cwd),
             "rendezvous": str(rendezvous),
+            "lease": str(lease_path),
         }
         request_path.write_text(json.dumps(payload) + "\n")
         with log_path.open("a") as log:
@@ -313,9 +350,7 @@ class CodexAxi:
                 ready = json.loads(rendezvous.read_text())
                 request_path.unlink(missing_ok=True)
                 rendezvous.unlink(missing_ok=True)
-                self.store.update_worker(
-                    ready["thread_id"], pid=process.pid, log=str(log_path), background=True
-                )
+                self.store.update_worker(ready["thread_id"], log=str(log_path))
                 return {
                     "worker": {
                         "id": ready["thread_id"],
@@ -408,6 +443,12 @@ class CodexAxi:
                 "worker_not_found",
                 f"Worker {thread_id} is not managed by codex-axi.",
                 "Run `codex-axi worker list`.",
+            )
+        if worker.get("status") in {"closed", "closing", "close_failed"}:
+            raise AxiError(
+                "worker_closed",
+                f"Worker {thread_id} is closed and cannot receive work.",
+                'Start a new worker with `codex-axi worker start --message "<task>"`.',
             )
         if self.store.active_turn(thread_id):
             result = self.steer(thread_id, message)
@@ -516,6 +557,16 @@ class CodexAxi:
     ) -> dict[str, Any]:
         turn_id = self.store.active_turn(thread_id)
         owner_pid = metadata.get("owner_pid") or metadata.get("pid")
+        # A live codex-axi owner is authoritative for an in-flight turn. A separate
+        # direct app-server can expose an older persisted terminal status while the
+        # owner is still streaming the turn and accepting filesystem controls.
+        owner_alive = (
+            _runner_lease_active(metadata.get("runner_lease"))
+            if metadata.get("background")
+            else bool(owner_pid and _pid_alive(owner_pid))
+        )
+        if turn_id and owner_alive:
+            return metadata
         if thread is None:
             try:
                 if client is not None:
@@ -524,7 +575,7 @@ class CodexAxi:
                     with self.client() as connection:
                         thread = read_thread_compat(connection, thread_id)
             except Exception:
-                if owner_pid and not _pid_alive(owner_pid):
+                if owner_pid and not owner_alive:
                     return self._finish_reconciliation(thread_id, metadata, "interrupted")
                 return metadata
         matching = next(
@@ -533,7 +584,7 @@ class CodexAxi:
         status = matching and _enum(matching.get("status"))
         if status in {"completed", "failed", "interrupted", "cancelled"}:
             return self._finish_reconciliation(thread_id, metadata, status)
-        if owner_pid and not _pid_alive(owner_pid):
+        if owner_pid and not owner_alive:
             return self._finish_reconciliation(thread_id, metadata, "interrupted")
         return metadata
 
@@ -792,3 +843,31 @@ def _pid_alive(pid: int) -> bool:
         return True
     except OSError:
         return False
+
+
+def _wait_pid_exit(pid: int, *, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.05)
+    return not _pid_alive(pid)
+
+
+def _runner_lease_active(path: str | None) -> bool:
+    if not path:
+        return False
+    try:
+        with Path(path).open("a+") as lease:
+            acquired = False
+            try:
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except BlockingIOError:
+                return True
+            finally:
+                if acquired:
+                    fcntl.flock(lease, fcntl.LOCK_UN)
+    except OSError:
+        return False
+    return False
