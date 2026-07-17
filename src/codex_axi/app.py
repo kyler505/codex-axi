@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .errors import AxiError, translate_runtime_error
-from .events import EventJournal, follow_events, read_events
+from .events import EventJournal, follow_events, read_event_page
 from .output import preview
 from .runtime import RuntimeCapabilities, open_connection, probe_runtime, read_thread_compat
 from .state import StateStore
@@ -130,12 +130,11 @@ class CodexAxi:
                 "status": "not_captured",
                 "help": ["Start a new turn with `--events` to capture live events."],
             }
-        matching = read_events(Path(path), since=since, limit=10**9)
-        records = matching[-limit:]
+        records, total = read_event_page(Path(path), since=since, limit=limit)
         return {
             "returned": len(records),
-            "total": len(matching),
-            "has_more": len(matching) > len(records),
+            "total": total,
+            "has_more": total > len(records),
             "turn_id": metadata.get("event_turn_id"),
             "events": records,
         }
@@ -158,7 +157,13 @@ class CodexAxi:
             )
             return bool(current and current.get("status") == "running")
 
-        yield from follow_events(Path(path), since=since, running=running)
+        journal = EventJournal(Path(path))
+        yield from follow_events(
+            journal.path,
+            since=since,
+            running=running,
+            finished=journal.is_finished,
+        )
 
     def _event_metadata(self, thread_id: str, kind: str) -> dict[str, Any]:
         metadata = self.store.worker(thread_id) if kind == "worker" else self.store.task(thread_id)
@@ -729,6 +734,8 @@ class CodexAxi:
             except BaseException as error:
                 outcome["error"] = error
             finally:
+                if journal is not None:
+                    journal.finish()
                 completed.set()
 
         collector = threading.Thread(target=collect, name=f"codex-axi-turn-{turn.id}", daemon=True)
@@ -807,11 +814,12 @@ class CodexAxi:
     def _prepare_events(
         self, thread_id: str, turn_id: str, kind: str, options: dict[str, Any]
     ) -> EventJournal | None:
-        journal = (
-            EventJournal.create(self.store.path, thread_id, turn_id)
-            if options.get("events")
-            else None
-        )
+        journal = None
+        if options.get("events"):
+            try:
+                journal = EventJournal.create(self.store.path, thread_id, turn_id)
+            except OSError:
+                pass
         values = {
             "event_log": str(journal.path) if journal else None,
             "event_turn_id": turn_id if journal else None,
