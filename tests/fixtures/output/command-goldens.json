@@ -1,0 +1,80 @@
+{
+  "invalid_cursor": {
+    "exit_code": 2,
+    "document": {
+      "error": "argument --since: sequence must be zero or greater",
+      "code": "invalid_usage",
+      "help": "Valid flags: help, since, limit, follow. Run `codex-axi task events --help`."
+    }
+  },
+  "worker_empty": {
+    "exit_code": 0,
+    "document": {
+      "count": 0,
+      "workers": [],
+      "help": [
+        "codex-axi worker start --message \"<task>\"",
+        "codex-axi worker view <thread>"
+      ]
+    }
+  },
+  "worker_list": {
+    "exit_code": 0,
+    "document": {
+      "count": 1,
+      "workers": [
+        {"id": "worker-fixture", "label": null, "status": "completed", "role": "verifier"}
+      ],
+      "help": [
+        "codex-axi worker start --message \"<task>\"",
+        "codex-axi worker view <thread>"
+      ]
+    }
+  },
+  "worker_detail": {
+    "exit_code": 0,
+    "document": {
+      "worker": {
+        "id": "worker-fixture",
+        "kind": "worker",
+        "status": "completed",
+        "cwd": "/workspace",
+        "role": "verifier",
+        "result": "done"
+      }
+    }
+  },
+  "worker_events": {
+    "exit_code": 0,
+    "document": {
+      "returned": 1,
+      "total": 1,
+      "has_more": false,
+      "turn_id": "turn-fixture",
+      "events": [
+        {
+          "schema_version": 1,
+          "sequence": 1,
+          "method": "turn/completed",
+          "payload": {"turn": {"id": "turn-fixture"}},
+          "extension": false
+        }
+      ]
+    }
+  },
+  "setup_mutation": {
+    "exit_code": 0,
+    "document": {
+      "setup": {
+        "targets": ["claude", "codex", "opencode"],
+        "changed": ["claude", "codex", "opencode"],
+        "status": "updated",
+        "adapters": [
+          {"target": "claude", "contract_version": 1, "status": "current"},
+          {"target": "codex", "contract_version": 1, "status": "current"},
+          {"target": "opencode", "contract_version": 1, "status": "current"}
+        ]
+      }
+    }
+  }
+}

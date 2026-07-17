@@ -26,14 +26,17 @@ def test_journal_captures_allowlisted_events_and_ignores_reasoning(tmp_path):
     journal.emit(event("turn/started", turn={"id": "turn-1"}))
     journal.emit(event("item/reasoning/textDelta", delta="private"))
     journal.emit(event("item/commandExecution/outputDelta", delta="progress"))
+    journal.emit(event("future/additiveEvent", value="preserved"))
 
     records = read_events(journal.path)
-    assert [record["sequence"] for record in records] == [1, 2]
+    assert [record["sequence"] for record in records] == [1, 2, 3]
     assert all(record["schema_version"] == EVENT_SCHEMA_VERSION for record in records)
     assert [record["method"] for record in records] == [
         "turn/started",
         "item/commandExecution/outputDelta",
+        "future/additiveEvent",
     ]
+    assert records[-1]["extension"] is True
     assert "private" not in journal.path.read_text()
     assert journal.path.stat().st_mode & 0o777 == 0o600
 
@@ -152,6 +155,25 @@ def test_event_payload_is_bounded(tmp_path):
 def test_corrupt_event_record_is_structured(tmp_path):
     path = tmp_path / "events.jsonl"
     path.write_text("{partial")
+    with pytest.raises(AxiError) as caught:
+        read_events(path)
+    assert caught.value.code == "events_corrupt"
+
+
+def test_follow_rejects_terminal_partial_record(tmp_path):
+    path = tmp_path / "events.jsonl"
+    path.write_text('{"schema_version":1,"sequence":1')
+    with pytest.raises(AxiError) as caught:
+        list(follow_events(path, running=lambda: False))
+    assert caught.value.code == "events_corrupt"
+
+
+def test_snapshot_rejects_active_writer_partial_tail(tmp_path):
+    path = tmp_path / "events.jsonl"
+    path.write_text(
+        '{"schema_version":1,"sequence":1,"method":"turn/started","payload":{}}\n'
+        '{"schema_version":1,"sequence":2'
+    )
     with pytest.raises(AxiError) as caught:
         read_events(path)
     assert caught.value.code == "events_corrupt"

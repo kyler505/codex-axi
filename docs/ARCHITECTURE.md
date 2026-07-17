@@ -60,6 +60,11 @@ closes its SDK connection, not the shared daemon.
 The precise version-specific behavior belongs in
 [Implementation notes](IMPLEMENTATION.md), not in the command contract.
 
+Runtime selection is driven by typed, independently reported capabilities.
+Codex and SDK versions identify the tested policy and fixture provenance; they
+do not substitute for daemon health, transport, authentication, observation,
+control, output, or integration capability results.
+
 ## Active-turn control
 
 Steering and interruption require the exact active turn ID recorded at dispatch.

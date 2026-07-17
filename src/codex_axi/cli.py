@@ -60,7 +60,8 @@ def build_parser() -> Parser:
     )
     parser.add_argument("--json", action="store_true", help="emit JSON instead of TOON")
     subs = parser.add_subparsers(dest="command", parser_class=Parser)
-    subs.add_parser("doctor", help="probe runtime compatibility")
+    doctor = subs.add_parser("doctor", help="probe runtime compatibility")
+    doctor.add_argument("--full", action="store_true", help="include per-capability evidence")
     daemon = subs.add_parser("daemon", help="inspect the managed daemon")
     daemon.add_argument("action", choices=("status",))
     task = subs.add_parser("task", help="manage Codex tasks").add_subparsers(
@@ -111,6 +112,8 @@ def build_parser() -> Parser:
     setup = subs.add_parser("setup", help="install opt-in integrations")
     setup.add_argument("action", choices=("hooks",))
     setup.add_argument("--target", choices=("claude", "codex", "opencode", "all"), default="all")
+    setup.add_argument("--check", action="store_true", help="validate without changing files")
+    setup.add_argument("--remove", action="store_true", help="remove only codex-axi entries")
     subs.add_parser("mcp-server", help="run the thin MCP adapter")
     return parser
 
@@ -195,17 +198,27 @@ def dispatch(args: argparse.Namespace) -> dict[str, Any]:
     caps = probe_runtime()
     if args.command == "doctor":
         status = "unauthenticated" if caps.authenticated is False else caps.daemon_state
+        rate_limits = read_rate_limits(caps)
         return {
-            "runtime": caps.document(),
-            "rate_limits": read_rate_limits(caps),
+            "runtime": caps.document(
+                full=args.full, rate_limits_available=bool(rate_limits.get("available"))
+            ),
+            "rate_limits": rate_limits,
             "status": status,
         }
     if args.command == "daemon":
-        return {"runtime": caps.document(), "status": caps.daemon_state}
+        return {"runtime": caps.document(full=True), "status": caps.daemon_state}
     if args.command == "setup":
         from .integrations import setup_hooks
 
-        return setup_hooks(args.target)
+        if args.check and args.remove:
+            raise AxiError(
+                "invalid_usage",
+                "--check and --remove cannot be combined.",
+                "Choose either read-only validation or removal.",
+                2,
+            )
+        return setup_hooks(args.target, check=args.check, remove=args.remove)
     app = CodexAxi(capabilities=caps)
     if args.command is None:
         doc = app.dashboard()

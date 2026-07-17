@@ -1,0 +1,10 @@
+[
+  {"workspace": "/workspace", "runtime": {"status": "stopped", "transport": "direct-fallback"}, "tasks": [], "workers": []},
+  {"runtime": {"execution_path": "direct-stdio", "capability_summary": {"supported": 8}}, "rate_limits": {"available": true}, "status": "stopped"},
+  {"error": "Invalid input.", "code": "invalid_usage", "help": "Run `codex-axi --help`."},
+  {"count": 0, "workers": [], "help": ["codex-axi worker start --message \"<task>\""]},
+  {"returned": 2, "total": 2, "has_more": false, "tasks": [{"id": "1", "status": "completed"}, {"id": "2", "status": "failed"}]},
+  {"task": {"id": "1", "status": "completed", "final_response": "done"}},
+  {"worker": {"id": "2", "status": "interrupted"}},
+  {"schema_version": 1, "sequence": 1, "method": "turn/started", "payload": {"turn": {"id": "turn-1"}}}
+]

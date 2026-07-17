@@ -86,6 +86,8 @@ writer-finished marker while the recorded owner process remains alive. If the
 writer exits without marking completion, followers perform a bounded terminal
 drain after metadata becomes terminal so a missing marker cannot leave them
 blocked forever.
+Unknown additive notification methods are retained with `extension: true`;
+methods containing reasoning data are excluded regardless of version.
 
 For lifecycle-specific verification, use the recovery, stale-turn, native
 delegation, ambient-context, and structured-output checks in

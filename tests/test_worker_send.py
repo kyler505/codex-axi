@@ -44,3 +44,19 @@ def test_send_rejects_closed_worker_before_runtime_access(tmp_path, monkeypatch)
         service.send_worker("thread-1", "continue")
 
     assert caught.value.code == "worker_closed"
+
+
+def test_send_cannot_enable_events_on_an_already_active_turn(tmp_path):
+    store = StateStore(tmp_path / "state.json")
+    store.update_worker(
+        "thread-1", kind="worker", status="running", event_log="/tmp/previous.jsonl"
+    )
+    store.set_active_turn("thread-1", "turn-1")
+    service = CodexAxi(
+        cwd=Path("/repo"),
+        store=store,
+        capabilities=RuntimeCapabilities("/bin/codex", "0.144.3", True, True, "healthy"),
+    )
+    with pytest.raises(AxiError) as caught:
+        service.send_worker("thread-1", "continue", events=True)
+    assert caught.value.code == "events_require_new_turn"

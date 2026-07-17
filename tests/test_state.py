@@ -37,3 +37,11 @@ def test_malformed_state_recovers_to_definitive_empty_state(tmp_path):
     path.write_text("not json")
     assert StateStore(path).workers() == {}
     assert list(tmp_path.glob("state.json.corrupt.*"))
+
+
+def test_state_supports_unicode_and_spaces_in_path(tmp_path):
+    path = tmp_path / "state dir ü" / "state file.json"
+    store = StateStore(path)
+    store.update_task("thread-ü", status="completed")
+    assert store.task("thread-ü")["status"] == "completed"
+    assert not list(path.parent.glob("state.*.json"))

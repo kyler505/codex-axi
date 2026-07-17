@@ -9,21 +9,53 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12", "3.13"]
+        include:
+          - { os: ubuntu-latest, python-version: "3.10" }
+          - { os: ubuntu-latest, python-version: "3.11" }
+          - { os: ubuntu-latest, python-version: "3.12" }
+          - { os: ubuntu-latest, python-version: "3.13" }
+          - { os: ubuntu-latest, python-version: "3.14" }
+          - { os: macos-latest, python-version: "3.12" }
+          - { os: macos-latest, python-version: "3.14" }
+          - { os: windows-latest, python-version: "3.12" }
+          - { os: windows-latest, python-version: "3.14" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+      - uses: astral-sh/setup-uv@v6
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e '.[dev,mcp]'
+      - run: python -m pip install -e '.[dev,mcp]' pipx
       - run: python -m pytest
       - run: python -m ruff check src tests
-      - run: PYTHONPATH=src python -m codex_axi.skill --check
+      - run: python -m codex_axi.skill --check
       - run: python -m build
       - run: python -m twine check dist/*
+      - run: python -m pip install --force-reinstall dist/codex_axi-0.1.0-py3-none-any.whl
+      - run: codex-axi --help
+      - run: python -m pip install --force-reinstall dist/codex_axi-0.1.0.tar.gz
+      - run: codex-axi doctor --help
+      - run: pipx install dist/codex_axi-0.1.0-py3-none-any.whl
+      - run: pipx runpip codex-axi show codex-axi
+      - run: pipx uninstall codex-axi
+      - run: uv tool install dist/codex_axi-0.1.0.tar.gz
+      - run: uv tool run codex-axi --help
+
+  output-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: python -m pip install -e .
+      - run: python scripts/check_output_contracts.py

@@ -18,15 +18,17 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: MacOS",
   "Operating System :: POSIX",
+  "Operating System :: Microsoft :: Windows",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Software Development",
 ]
-dependencies = ["openai-codex>=0.1.0b3,<0.2"]
+dependencies = ["openai-codex>=0.1.0b3,<0.2", "tomli>=2; python_version<'3.11'"]
 
 [project.urls]
 Homepage = "https://github.com/kyler505/codex-axi"
@@ -35,9 +37,9 @@ Issues = "https://github.com/kyler505/codex-axi/issues"
 Source = "https://github.com/kyler505/codex-axi"
 
 [project.optional-dependencies]
-test = ["pytest>=8", "ruff>=0.15"]
+test = ["pytest>=8", "ruff>=0.15", "jsonschema>=4"]
 mcp = ["mcp>=1.0,<2"]
-dev = ["pytest>=8", "ruff>=0.15", "build>=1.2", "twine>=6"]
+dev = ["pytest>=8", "ruff>=0.15", "jsonschema>=4", "build>=1.2", "twine>=6"]
 
 [project.scripts]
 codex-axi = "codex_axi.cli:main"

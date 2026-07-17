@@ -1,0 +1,48 @@
+{
+  "metadata": {
+    "codex_version": "0.144.5",
+    "sdk_version": "0.1.0b3",
+    "platform": "darwin",
+    "execution_path": "direct-stdio",
+    "captured": "2026-07-17",
+    "sanitized": true
+  },
+  "daemon_version": {
+    "cliVersion": "0.144.5",
+    "appServerVersion": "0.144.5"
+  },
+  "initialize": {
+    "userAgent": "codex-axi-fixture",
+    "platformFamily": "unix"
+  },
+  "thread_read": {
+    "thread": {
+      "id": "thread-fixture",
+      "status": "notLoaded",
+      "turns": [],
+      "futureAdditiveField": {"preserved": true}
+    }
+  },
+  "events": [
+    {"method": "turn/started", "payload": {"turn": {"id": "turn-fixture"}}},
+    {"method": "future/additiveEvent", "payload": {"value": 1}},
+    {"method": "turn/completed", "payload": {"turn": {"id": "turn-fixture", "status": "completed"}}}
+  ],
+  "native_agent": {
+    "type": "subAgentActivity",
+    "agentThreadId": "child-fixture",
+    "parentThreadId": "thread-fixture"
+  },
+  "rate_limits": {
+    "rateLimits": {
+      "primary": {"usedPercent": 12, "resetsAt": 1234, "windowDurationMins": 300},
+      "secondary": null,
+      "rateLimitReachedType": null
+    }
+  },
+  "failures": {
+    "missing_thread": "thread not found",
+    "invalid_envelope": {"unexpected": true},
+    "transport_closed": "sanitized transport closed"
+  }
+}

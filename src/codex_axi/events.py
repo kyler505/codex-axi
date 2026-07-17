@@ -84,7 +84,7 @@ class EventJournal:
     def emit(self, event: Any) -> None:
         """Append an allow-listed event; observability must never break a turn."""
 
-        if event.method not in VISIBLE_EVENT_METHODS:
+        if "reasoning" in event.method.lower():
             return
         if event.method in ("item/started", "item/completed") and _is_reasoning_item(event.payload):
             return
@@ -100,6 +100,7 @@ class EventJournal:
                 "sequence": self._sequence,
                 "method": event.method,
                 "payload": payload,
+                "extension": event.method not in VISIBLE_EVENT_METHODS,
             }
             encoded = json.dumps(record, separators=(",", ":"), default=_json_value)
             if len(encoded.encode("utf-8")) > MAX_EVENT_BYTES:
@@ -212,6 +213,9 @@ def follow_events(
                 handle.seek(position)
                 line = handle.readline()
                 if line:
+                    if not line.endswith("\n") and running():
+                        time.sleep(poll_interval)
+                        continue
                     position = handle.tell()
                     record = _decode_record(line)
                     if record.get("sequence", 0) > since:

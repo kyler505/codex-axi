@@ -1,0 +1,5 @@
+{
+  "export": "CodexAxiAmbientContextPlugin",
+  "hook": "experimental.chat.system.transform",
+  "command": "codex-axi"
+}
