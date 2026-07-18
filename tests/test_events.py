@@ -108,7 +108,7 @@ def test_follow_events_waits_for_writer_after_metadata_is_terminal(tmp_path):
         journal.emit(event("turn/completed", turn={"id": "turn-1"}))
         journal.finish()
 
-    writer = threading.Thread(target=finish_later)
+    writer = threading.Thread(target=finish_later, daemon=True)
     writer.start()
     records = list(
         follow_events(
