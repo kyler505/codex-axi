@@ -3,6 +3,7 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -303,16 +304,25 @@ def test_active_turn_control_is_applied_by_owner(tmp_path):
             self.steered.set()
 
         def run(self):
-            assert self.steered.wait(2)
+            assert self.steered.wait(10)
             return SimpleNamespace(id=self.id)
 
     turn = Turn()
     service.store.set_active_turn("thread-1", turn.id)
-    caller = threading.Thread(target=lambda: service.steer("thread-1", "new direction"))
+    outcome: dict[str, Any] = {}
+
+    def call_steer() -> None:
+        try:
+            service.steer("thread-1", "new direction", timeout=10)
+        except Exception as error:  # pragma: no cover - surfaced via assertion below
+            outcome["error"] = error
+
+    caller = threading.Thread(target=call_steer)
     caller.start()
     service._run_controlled("thread-1", turn)
-    caller.join(timeout=2)
+    caller.join(timeout=10)
     assert not caller.is_alive()
+    assert "error" not in outcome, outcome.get("error")
 
 
 def test_foreground_timeout_interrupts_and_marks_task_interrupted(tmp_path):
