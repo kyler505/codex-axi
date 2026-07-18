@@ -24,7 +24,7 @@ real initialize exchange over the daemon's WebSocket control socket. A
 successful response is therefore authoritative daemon health, including when
 the managed process was started with `--remote-control`.
 
-The published `openai-codex` 0.1.0b3 SDK uses newline-delimited JSON-RPC over
+The tested `openai-codex` 0.144.x SDK uses newline-delimited JSON-RPC over
 stdio. `codex app-server proxy` is a raw byte relay to a WebSocket-framed Unix
 socket, so selecting it through the SDK's command override does not create a
 compatible shared transport. `doctor` reports this separately as
@@ -39,7 +39,7 @@ cross-process control while shared attachment is unavailable.
 ## Historical native-agent hydration
 
 Codex 0.144.3 can emit `subAgentActivity` thread items that the matching
-`openai-codex` 0.1.0b3 generated `ThreadItem` union cannot deserialize.
+The tested `openai-codex` 0.144.x generated `ThreadItem` union cannot deserialize.
 For that compatibility case only, native-agent discovery reads the SDK client's
 raw `thread/read` result so unknown items survive hydration. A returned child
 must still identify the requested root via `parentThreadId` before the CLI calls

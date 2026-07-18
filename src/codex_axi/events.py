@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections import deque
 from collections.abc import Callable, Iterator
 from enum import Enum
 from pathlib import Path
@@ -159,7 +158,7 @@ def read_events(path: Path, *, since: int = 0, limit: int = 100) -> list[dict[st
 def read_event_page(
     path: Path, *, since: int = 0, limit: int = 100
 ) -> tuple[list[dict[str, Any]], int]:
-    records: deque[dict[str, Any]] = deque(maxlen=limit)
+    records: list[dict[str, Any]] = []
     total = 0
     try:
         with path.open() as handle:
@@ -170,14 +169,15 @@ def read_event_page(
                 if record.get("sequence", 0) <= since:
                     continue
                 total += 1
-                records.append(record)
+                if len(records) < limit:
+                    records.append(record)
     except FileNotFoundError as error:
         raise AxiError(
             "events_unavailable",
             "The event journal is no longer available.",
             "Start a new turn with `--events` to capture live events.",
         ) from error
-    return list(records), total
+    return records, total
 
 
 def _decode_record(line: str) -> dict[str, Any]:

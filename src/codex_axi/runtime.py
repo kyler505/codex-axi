@@ -14,6 +14,7 @@ from typing import Callable, Sequence
 from .errors import AxiError, translate_runtime_error
 
 SUPPORTED_CODEX = ">=0.144.0,<0.145.0"
+SUPPORTED_SDK = ">=0.144,<0.145"
 
 
 @dataclass(frozen=True)
@@ -75,16 +76,17 @@ class RuntimeCapabilities:
 
     @property
     def execution_path(self) -> str:
-        if self.shared_transport_available and self.daemon_state == "healthy":
+        sdk_supported = _sdk_in_supported_range(self.sdk_version)
+        if sdk_supported and self.shared_transport_available and self.daemon_state == "healthy":
             return "managed-proxy"
-        if self.codex_path and self.sdk_version:
+        if self.codex_path and sdk_supported:
             return "direct-stdio"
         return "unavailable"
 
     def capability_report(
         self, *, rate_limits_available: bool | None = None
     ) -> tuple[Capability, ...]:
-        direct = bool(self.codex_path and self.sdk_version)
+        direct = bool(self.codex_path and _sdk_in_supported_range(self.sdk_version))
         try:
             from .integrations import integration_capability_statuses
 
@@ -102,6 +104,12 @@ class RuntimeCapabilities:
                 "supported" if _cli_in_supported_range(self.cli_version) else "degraded",
                 "version_policy",
                 f"tested range: {self.supported_codex}",
+            ),
+            Capability(
+                "runtime.sdk_policy",
+                "supported" if _sdk_in_supported_range(self.sdk_version) else "degraded",
+                "version_policy",
+                f"tested range: {SUPPORTED_SDK}",
             ),
             Capability("runtime.authenticated", _bool_status(self.authenticated), "probe"),
             Capability("execution.direct_stdio", _status(direct), "sdk_surface"),
@@ -146,6 +154,11 @@ def _daemon_capability(state: str) -> str:
 
 def _cli_in_supported_range(value: str | None) -> bool:
     match = re.search(r"(\d+)\.(\d+)\.(\d+)", value or "")
+    return bool(match and (int(match.group(1)), int(match.group(2))) == (0, 144))
+
+
+def _sdk_in_supported_range(value: str | None) -> bool:
+    match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", value or "")
     return bool(match and (int(match.group(1)), int(match.group(2))) == (0, 144))
 
 

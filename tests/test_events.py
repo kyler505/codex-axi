@@ -67,10 +67,10 @@ def test_read_events_supports_cursor_and_limit(tmp_path):
         journal.emit(event("item/agentMessage/delta", delta=str(number)))
 
     records = read_events(journal.path, since=1, limit=2)
-    assert [record["sequence"] for record in records] == [3, 4]
+    assert [record["sequence"] for record in records] == [2, 3]
 
 
-def test_event_page_scans_incrementally_with_bounded_tail(tmp_path, monkeypatch):
+def test_event_page_returns_next_bounded_page_without_skipping(tmp_path, monkeypatch):
     journal = EventJournal.create(tmp_path / "state.json", "thread-1", "turn-1")
     for number in range(10):
         journal.emit(event("item/agentMessage/delta", delta=str(number)))
@@ -82,7 +82,17 @@ def test_event_page_scans_incrementally_with_bounded_tail(tmp_path, monkeypatch)
 
     records, total = read_event_page(journal.path, since=2, limit=2)
     assert total == 8
-    assert [record["sequence"] for record in records] == [9, 10]
+    assert [record["sequence"] for record in records] == [3, 4]
+
+    seen = []
+    cursor = 0
+    while True:
+        page, remaining = read_event_page(journal.path, since=cursor, limit=3)
+        seen.extend(record["sequence"] for record in page)
+        if remaining <= len(page):
+            break
+        cursor = page[-1]["sequence"]
+    assert seen == list(range(1, 11))
 
 
 def test_follow_events_drains_terminal_journal(tmp_path):

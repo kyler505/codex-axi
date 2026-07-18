@@ -2,6 +2,11 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+try:
+    import tomllib
+except ImportError:  # pragma: no cover - Python 3.10
+    import tomli as tomllib
+
 from codex_axi.events import EventJournal, read_events
 from codex_axi.integrations import ADAPTER_VERSIONS
 from codex_axi.runtime import SUPPORTED_CODEX, read_thread_compat
@@ -33,6 +38,12 @@ def test_compatibility_manifest_matches_runtime_policy_and_fixtures():
                 "failures",
             } <= set(data)
 
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    sdk_requirement = next(
+        item for item in project["project"]["dependencies"] if item.startswith("openai-codex")
+    )
+    assert sdk_requirement.removeprefix("openai-codex") == manifest["codex"][0]["sdk"]
+
 
 def test_manifest_covers_declared_python_and_platform_targets():
     manifest = json.loads((ROOT / "compatibility" / "manifest.json").read_text())
@@ -42,7 +53,7 @@ def test_manifest_covers_declared_python_and_platform_targets():
 
 def test_protocol_fixture_drives_thread_and_event_compatibility(tmp_path):
     fixture = json.loads(
-        (ROOT / "compatibility" / "fixtures" / "codex-0.144-sdk-0.1.0b3.json").read_text()
+        (ROOT / "compatibility" / "fixtures" / "codex-0.144-sdk-0.144.4.json").read_text()
     )
 
     class RawClient:

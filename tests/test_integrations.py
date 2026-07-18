@@ -130,6 +130,38 @@ def test_setup_enables_existing_disabled_codex_feature(tmp_path, monkeypatch):
     assert path.read_text() == "[features]\nhooks = true\n"
 
 
+@pytest.mark.parametrize("unrelated", ["true", "false"])
+def test_codex_setup_only_mutates_features_hooks(tmp_path, monkeypatch, unrelated):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(integrations, "_command", lambda: "codex-axi")
+    path = tmp_path / ".codex" / "config.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text(f"[other]\nhooks = {unrelated}\n\n[features]\nhooks = false\n")
+
+    integrations.setup_hooks("codex")
+
+    assert path.read_text() == f"[other]\nhooks = {unrelated}\n\n[features]\nhooks = true\n"
+
+
+def test_hook_setup_preserves_unrelated_entry_that_mentions_codex_axi(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(integrations, "_command", lambda: "/new/codex-axi")
+    path = tmp_path / ".claude" / "settings.json"
+    path.parent.mkdir(parents=True)
+    unrelated = {
+        "matcher": "codex-axi project",
+        "hooks": [{"type": "command", "command": "other-tool --label codex-axi"}],
+    }
+    path.write_text(json.dumps({"hooks": {"SessionStart": [unrelated]}}))
+
+    integrations.setup_hooks("claude")
+    entries = json.loads(path.read_text())["hooks"]["SessionStart"]
+    assert unrelated in entries
+
+    integrations.setup_hooks("claude", remove=True)
+    assert json.loads(path.read_text())["hooks"]["SessionStart"] == [unrelated]
+
+
 def test_check_and_remove_are_read_only_then_scoped(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(integrations, "_command", lambda: "codex-axi")

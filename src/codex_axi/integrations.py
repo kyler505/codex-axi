@@ -143,17 +143,18 @@ def _read_json_object(path: Path) -> dict[str, Any]:
 def _hook_status(path: Path, command: str) -> str:
     data = _read_json_object(path)
     entries = _hook_entries(data, path, "hooks", "SessionStart") if data else []
-    managed = [entry for entry in entries if "codex-axi" in json.dumps(entry)]
+    managed = [entry for entry in entries if _managed_hook_command(entry) is not None]
     if not managed:
         return "missing"
-    return "current" if any(command in json.dumps(entry) for entry in managed) else "drifted"
+    current = any(_managed_hook_command(entry) == command for entry in managed)
+    return "current" if current else "drifted"
 
 
 def _merge_hook(path: Path, root: str, event: str, command: str) -> bool:
     data = _read_json_object(path)
     hook = {"matcher": "", "hooks": [{"type": "command", "command": command}]}
     existing = _hook_entries(data, path, root, event, create=True)
-    filtered = [entry for entry in existing if "codex-axi" not in json.dumps(entry)]
+    filtered = [entry for entry in existing if _managed_hook_command(entry) is None]
     filtered.append(hook)
     data[root][event] = filtered
     return _write_if_changed(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
@@ -164,7 +165,7 @@ def _remove_hook(path: Path, root: str, event: str) -> bool:
     if not data:
         return False
     existing = _hook_entries(data, path, root, event)
-    filtered = [entry for entry in existing if "codex-axi" not in json.dumps(entry)]
+    filtered = [entry for entry in existing if _managed_hook_command(entry) is None]
     if filtered == existing:
         return False
     data[root][event] = filtered
@@ -189,6 +190,22 @@ def _hook_entries(
             f"Repair `{path}` and rerun setup; the existing file was not changed.",
         )
     return entries
+
+
+def _managed_hook_command(entry: Any) -> str | None:
+    if not isinstance(entry, dict) or set(entry) != {"matcher", "hooks"}:
+        return None
+    hooks = entry.get("hooks")
+    if entry.get("matcher") != "" or not isinstance(hooks, list) or len(hooks) != 1:
+        return None
+    hook = hooks[0]
+    if not isinstance(hook, dict) or set(hook) != {"type", "command"}:
+        return None
+    command = hook.get("command")
+    if hook.get("type") != "command" or not isinstance(command, str):
+        return None
+    executable = Path(command).name.lower()
+    return command if executable in {"codex-axi", "codex-axi.exe"} else None
 
 
 def integration_capability_statuses() -> dict[str, str]:
@@ -234,15 +251,25 @@ def _enable_codex_hooks(path: Path) -> bool:
         content = ""
     if content:
         _parse_toml(path, content)
-    if re.search(r"(?m)^hooks[ \t]*=[ \t]*true[ \t]*$", content):
+    section = re.search(r"(?m)^\[features\][ \t]*(?:#.*)?$", content)
+    section_end = (
+        re.search(r"(?m)^\[[^\n]+\][ \t]*(?:#.*)?$", content[section.end() :])
+        if section
+        else None
+    )
+    start = section.end() if section else 0
+    end = start + section_end.start() if section and section_end else len(content)
+    features = content[start:end] if section else ""
+    if re.search(r"(?m)^hooks[ \t]*=[ \t]*true[ \t]*(?:#.*)?$", features):
         return False
-    disabled = re.search(r"(?m)^hooks[ \t]*=[ \t]*false[ \t]*$", content)
+    disabled = re.search(r"(?m)^hooks[ \t]*=[ \t]*false[ \t]*(?:#.*)?$", features)
     if disabled:
-        content = content[: disabled.start()] + "hooks = true" + content[disabled.end() :]
+        absolute_start = start + disabled.start()
+        absolute_end = start + disabled.end()
+        content = content[:absolute_start] + "hooks = true" + content[absolute_end:]
         return _write_if_changed(path, content)
-    match = re.search(r"(?m)^\[features\]\s*$", content)
-    if match:
-        insert = match.end()
+    if section:
+        insert = section.end()
         content = content[:insert] + "\nhooks = true" + content[insert:]
     else:
         prefix = content.rstrip()

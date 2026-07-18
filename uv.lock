@@ -317,7 +317,7 @@ requires-dist = [
     { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4" },
     { name = "jsonschema", marker = "extra == 'test'", specifier = ">=4" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0,<2" },
-    { name = "openai-codex", specifier = ">=0.130,<1" },
+    { name = "openai-codex", specifier = ">=0.144,<0.145" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15" },

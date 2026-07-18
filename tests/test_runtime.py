@@ -38,11 +38,24 @@ def test_probe_reports_stopped_daemon_without_claiming_health():
 
 
 def test_rate_limit_capability_uses_probe_result():
-    runtime = RuntimeCapabilities("/bin/codex", "codex-cli 0.144.3", True, True, "healthy")
+    runtime = RuntimeCapabilities(
+        "/bin/codex", "codex-cli 0.144.3", True, True, "healthy", sdk_version="0.144.4"
+    )
     available = {item.id: item for item in runtime.capability_report(rate_limits_available=True)}
     unavailable = {item.id: item for item in runtime.capability_report(rate_limits_available=False)}
     assert available["observation.rate_limits"].status == "supported"
     assert unavailable["observation.rate_limits"].status == "unavailable"
+
+
+def test_sdk_outside_tested_range_degrades_sdk_surface_capabilities():
+    runtime = RuntimeCapabilities(
+        "/bin/codex", "codex-cli 0.144.3", True, False, "stopped", sdk_version="0.145.0"
+    )
+    report = {item.id: item for item in runtime.capability_report()}
+    assert runtime.execution_path == "unavailable"
+    assert report["runtime.sdk_policy"].status == "degraded"
+    assert report["execution.direct_stdio"].status == "unsupported"
+    assert report["observation.thread_read"].status == "unsupported"
 
 
 def test_probe_reports_unauthenticated_codex():
