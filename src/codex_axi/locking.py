@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from contextlib import contextmanager
 from typing import IO, Iterator
 
@@ -20,13 +21,21 @@ def file_lock(handle: IO[str], *, blocking: bool = True) -> Iterator[bool]:
             handle.write("\0")
             handle.flush()
         handle.seek(0)
-        mode = msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK
-        try:
-            msvcrt.locking(handle.fileno(), mode, 1)
-            acquired = True
-        except OSError:
-            if blocking:
-                raise
+        # msvcrt.LK_LOCK retries only once per second, which is far coarser
+        # than the ~50ms polling used by callers contending for this lock.
+        # Poll LK_NBLCK ourselves at a much finer interval instead.
+        deadline = time.monotonic() + 10 if blocking else None
+        while True:
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                acquired = True
+                break
+            except OSError:
+                if not blocking or time.monotonic() >= deadline:
+                    if blocking:
+                        raise
+                    break
+                time.sleep(0.01)
     else:
         import fcntl
 
