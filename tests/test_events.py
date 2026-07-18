@@ -26,7 +26,7 @@ def test_journal_captures_allowlisted_events_and_ignores_reasoning(tmp_path):
     journal.emit(event("turn/started", turn={"id": "turn-1"}))
     journal.emit(event("item/reasoning/textDelta", delta="private"))
     journal.emit(event("item/commandExecution/outputDelta", delta="progress"))
-    journal.emit(event("future/additiveEvent", value="preserved"))
+    journal.emit(event("future/additiveEvent", value="unvetted-secret"))
 
     records = read_events(journal.path)
     assert [record["sequence"] for record in records] == [1, 2, 3]
@@ -37,7 +37,9 @@ def test_journal_captures_allowlisted_events_and_ignores_reasoning(tmp_path):
         "future/additiveEvent",
     ]
     assert records[-1]["extension"] is True
+    assert records[-1]["payload"] == {"omitted": True}
     assert "private" not in journal.path.read_text()
+    assert "unvetted-secret" not in journal.path.read_text()
     assert journal.path.stat().st_mode & 0o777 == 0o600
 
 

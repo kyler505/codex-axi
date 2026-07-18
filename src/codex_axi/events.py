@@ -82,7 +82,12 @@ class EventJournal:
             return False
 
     def emit(self, event: Any) -> None:
-        """Append an allow-listed event; observability must never break a turn."""
+        """Append the event's envelope; payloads are persisted only for
+        methods in VISIBLE_EVENT_METHODS. Reasoning events are always
+        dropped. Any other method is recorded as an extension event with
+        its payload omitted, so unvetted payload content is never written
+        to the on-disk journal.
+        """
 
         if "reasoning" in event.method.lower():
             return
@@ -90,17 +95,21 @@ class EventJournal:
             return
         try:
             self._sequence += 1
-            payload = event.payload
-            if hasattr(payload, "model_dump"):
-                payload = payload.model_dump(mode="json", by_alias=True)
-            elif not isinstance(payload, dict):
-                payload = vars(payload)
+            is_extension = event.method not in VISIBLE_EVENT_METHODS
+            if is_extension:
+                payload: Any = {"omitted": True}
+            else:
+                payload = event.payload
+                if hasattr(payload, "model_dump"):
+                    payload = payload.model_dump(mode="json", by_alias=True)
+                elif not isinstance(payload, dict):
+                    payload = vars(payload)
             record = {
                 "schema_version": EVENT_SCHEMA_VERSION,
                 "sequence": self._sequence,
                 "method": event.method,
                 "payload": payload,
-                "extension": event.method not in VISIBLE_EVENT_METHODS,
+                "extension": is_extension,
             }
             encoded = json.dumps(record, separators=(",", ":"), default=_json_value)
             if len(encoded.encode("utf-8")) > MAX_EVENT_BYTES:
