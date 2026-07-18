@@ -166,7 +166,14 @@ def test_follow_rejects_terminal_partial_record(tmp_path):
     path = tmp_path / "events.jsonl"
     path.write_text('{"schema_version":1,"sequence":1')
     with pytest.raises(AxiError) as caught:
-        list(follow_events(path, running=lambda: False))
+        list(
+            follow_events(
+                path,
+                running=lambda: False,
+                finished=lambda: True,
+                writer_active=lambda: False,
+            )
+        )
     assert caught.value.code == "events_corrupt"
 
 
