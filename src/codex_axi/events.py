@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections import deque
+from collections.abc import Callable, Iterator
 from enum import Enum
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from .errors import AxiError
 
@@ -28,6 +30,7 @@ VISIBLE_EVENT_METHODS = {
 }
 EVENT_SCHEMA_VERSION = 1
 MAX_EVENT_BYTES = 64 * 1024
+TERMINAL_DRAIN_SECONDS = 2.0
 
 
 class EventJournal:
@@ -37,14 +40,46 @@ class EventJournal:
         self.path = path
         self._sequence = 0
 
+    @property
+    def finished_path(self) -> Path:
+        return self.path.with_suffix(self.path.suffix + ".finished")
+
+    @property
+    def writer_path(self) -> Path:
+        return self.path.with_suffix(self.path.suffix + ".writer")
+
     @classmethod
     def create(cls, state_path: Path, thread_id: str, turn_id: str) -> EventJournal:
         directory = state_path.parent / "events"
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{thread_id}.{turn_id}.jsonl"
-        fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
-        os.close(fd)
-        return cls(path)
+        _write_private_file(path)
+        journal = cls(path)
+        journal.finished_path.unlink(missing_ok=True)
+        _write_private_file(journal.writer_path, str(os.getpid()).encode())
+        return journal
+
+    def finish(self) -> None:
+        """Mark the owning stream drained without affecting turn completion."""
+
+        try:
+            _write_private_file(self.finished_path)
+            self.writer_path.unlink(missing_ok=True)
+        except Exception:
+            return
+
+    def is_finished(self) -> bool:
+        return self.finished_path.exists()
+
+    def is_writer_active(self) -> bool:
+        try:
+            writer_pid = int(self.writer_path.read_text())
+            os.kill(writer_pid, 0)
+            return True
+        except PermissionError:
+            return True
+        except (OSError, ValueError):
+            return False
 
     def emit(self, event: Any) -> None:
         """Append an allow-listed event; observability must never break a turn."""
@@ -82,15 +117,32 @@ class EventJournal:
 
 
 def read_events(path: Path, *, since: int = 0, limit: int = 100) -> list[dict[str, Any]]:
+    records, _ = read_event_page(path, since=since, limit=limit)
+    return records
+
+
+def read_event_page(
+    path: Path, *, since: int = 0, limit: int = 100
+) -> tuple[list[dict[str, Any]], int]:
+    records: deque[dict[str, Any]] = deque(maxlen=limit)
+    total = 0
     try:
-        records = [_decode_record(line) for line in path.read_text().splitlines() if line.strip()]
+        with path.open() as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                record = _decode_record(line)
+                if record.get("sequence", 0) <= since:
+                    continue
+                total += 1
+                records.append(record)
     except FileNotFoundError as error:
         raise AxiError(
             "events_unavailable",
             "The event journal is no longer available.",
             "Start a new turn with `--events` to capture live events.",
         ) from error
-    return [record for record in records if record.get("sequence", 0) > since][-limit:]
+    return list(records), total
 
 
 def _decode_record(line: str) -> dict[str, Any]:
@@ -131,12 +183,29 @@ def _json_value(value: Any) -> Any:
     return str(value)
 
 
+def _write_private_file(path: Path, contents: bytes = b"") -> None:
+    fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+    try:
+        if contents:
+            os.write(fd, contents)
+    finally:
+        os.close(fd)
+
+
 def follow_events(
-    path: Path, *, since: int = 0, running: Any, poll_interval: float = 0.1
+    path: Path,
+    *,
+    since: int = 0,
+    running: Callable[[], bool],
+    finished: Callable[[], bool],
+    writer_active: Callable[[], bool],
+    poll_interval: float = 0.1,
+    terminal_drain: float = TERMINAL_DRAIN_SECONDS,
 ) -> Iterator[dict[str, Any]]:
     """Yield new records until the owning turn is terminal and the journal is drained."""
 
     position = 0
+    terminal_since = None
     try:
         with path.open() as handle:
             while True:
@@ -148,17 +217,14 @@ def follow_events(
                     if record.get("sequence", 0) > since:
                         yield record
                     continue
-                if not running():
-                    # Check once more after observing terminal metadata.
-                    handle.seek(position)
-                    line = handle.readline()
-                    if not line:
-                        return
-                    position = handle.tell()
-                    record = _decode_record(line)
-                    if record.get("sequence", 0) > since:
-                        yield record
-                    continue
+                if finished():
+                    return
+                if running() or writer_active():
+                    terminal_since = None
+                elif terminal_since is None:
+                    terminal_since = time.monotonic()
+                elif time.monotonic() - terminal_since >= terminal_drain:
+                    return
                 time.sleep(poll_interval)
     except FileNotFoundError as error:
         raise AxiError(

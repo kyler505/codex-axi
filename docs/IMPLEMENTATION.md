@@ -80,7 +80,12 @@ Reasoning deltas are not recorded. The event sink is deliberately passive, so
 serialization or filesystem failures cannot fail the turn or interfere with
 timeout, steer, or interrupt timing.
 Event envelopes use schema version `1`, payload records are bounded to 64 KiB,
-and each NDJSON line is flushed atomically from the owning process.
+and each NDJSON line is flushed atomically from the owning process. Snapshot
+reads retain only the requested tail in memory. Followers wait for an explicit
+writer-finished marker while the recorded owner process remains alive. If the
+writer exits without marking completion, followers perform a bounded terminal
+drain after metadata becomes terminal so a missing marker cannot leave them
+blocked forever.
 
 For lifecycle-specific verification, use the recovery, stale-turn, native
 delegation, ambient-context, and structured-output checks in
