@@ -46,7 +46,7 @@ def test_task_list_passes_cwd_filter_by_default(tmp_path):
 
     service.client = fake_client
     service.list_tasks()
-    assert captured["cwd"].root == "/repo"
+    assert captured["cwd"].root == str(service.cwd)
     captured.clear()
     service.list_tasks(all_workspaces=True)
     assert "cwd" not in captured
