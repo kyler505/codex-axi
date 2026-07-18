@@ -84,6 +84,7 @@ def test_follow_events_drains_terminal_journal(tmp_path):
             journal.path,
             running=lambda: False,
             finished=journal.is_finished,
+            writer_active=journal.is_writer_active,
         )
     )
     assert len(records) == 1
@@ -105,13 +106,35 @@ def test_follow_events_waits_for_writer_after_metadata_is_terminal(tmp_path):
             journal.path,
             running=lambda: False,
             finished=journal.is_finished,
+            writer_active=journal.is_writer_active,
             poll_interval=0.01,
-            terminal_drain=0.2,
+            terminal_drain=0.01,
         )
     )
     writer.join()
 
     assert [record["method"] for record in records] == ["turn/completed"]
+    assert not journal.writer_path.exists()
+
+
+def test_follow_events_uses_bounded_fallback_after_writer_exits(tmp_path):
+    journal = EventJournal.create(tmp_path / "state.json", "thread-1", "turn-1")
+    journal.writer_path.unlink()
+
+    started = time.monotonic()
+    records = list(
+        follow_events(
+            journal.path,
+            running=lambda: False,
+            finished=journal.is_finished,
+            writer_active=journal.is_writer_active,
+            poll_interval=0.005,
+            terminal_drain=0.02,
+        )
+    )
+
+    assert records == []
+    assert time.monotonic() - started >= 0.02
 
 
 def test_event_payload_is_bounded(tmp_path):

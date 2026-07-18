@@ -44,32 +44,42 @@ class EventJournal:
     def finished_path(self) -> Path:
         return self.path.with_suffix(self.path.suffix + ".finished")
 
+    @property
+    def writer_path(self) -> Path:
+        return self.path.with_suffix(self.path.suffix + ".writer")
+
     @classmethod
     def create(cls, state_path: Path, thread_id: str, turn_id: str) -> EventJournal:
         directory = state_path.parent / "events"
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{thread_id}.{turn_id}.jsonl"
-        fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
-        os.close(fd)
+        _write_private_file(path)
         journal = cls(path)
         journal.finished_path.unlink(missing_ok=True)
+        _write_private_file(journal.writer_path, str(os.getpid()).encode())
         return journal
 
     def finish(self) -> None:
         """Mark the owning stream drained without affecting turn completion."""
 
         try:
-            fd = os.open(
-                self.finished_path,
-                os.O_CREAT | os.O_TRUNC | os.O_WRONLY,
-                0o600,
-            )
-            os.close(fd)
+            _write_private_file(self.finished_path)
+            self.writer_path.unlink(missing_ok=True)
         except Exception:
             return
 
     def is_finished(self) -> bool:
         return self.finished_path.exists()
+
+    def is_writer_active(self) -> bool:
+        try:
+            writer_pid = int(self.writer_path.read_text())
+            os.kill(writer_pid, 0)
+            return True
+        except PermissionError:
+            return True
+        except (OSError, ValueError):
+            return False
 
     def emit(self, event: Any) -> None:
         """Append an allow-listed event; observability must never break a turn."""
@@ -173,12 +183,22 @@ def _json_value(value: Any) -> Any:
     return str(value)
 
 
+def _write_private_file(path: Path, contents: bytes = b"") -> None:
+    fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+    try:
+        if contents:
+            os.write(fd, contents)
+    finally:
+        os.close(fd)
+
+
 def follow_events(
     path: Path,
     *,
     since: int = 0,
     running: Callable[[], bool],
     finished: Callable[[], bool],
+    writer_active: Callable[[], bool],
     poll_interval: float = 0.1,
     terminal_drain: float = TERMINAL_DRAIN_SECONDS,
 ) -> Iterator[dict[str, Any]]:
@@ -199,7 +219,7 @@ def follow_events(
                     continue
                 if finished():
                     return
-                if running():
+                if running() or writer_active():
                     terminal_since = None
                 elif terminal_since is None:
                     terminal_since = time.monotonic()

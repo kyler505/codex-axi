@@ -163,6 +163,7 @@ class CodexAxi:
             since=since,
             running=running,
             finished=journal.is_finished,
+            writer_active=journal.is_writer_active,
         )
 
     def _event_metadata(self, thread_id: str, kind: str) -> dict[str, Any]:
