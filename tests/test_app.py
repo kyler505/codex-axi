@@ -113,6 +113,7 @@ def test_task_view_uses_sdk_status_for_untracked_thread(tmp_path, monkeypatch):
 
 def test_task_view_reconciles_stale_running_status_from_turn_history(tmp_path, monkeypatch):
     service = app(tmp_path)
+    monkeypatch.setattr("codex_axi.app._pid_alive", lambda _: False)
     service.store.update_task("thread-1", kind="task", status="running", owner_pid=1)
     service.store.set_active_turn("thread-1", "turn-1")
 
@@ -156,6 +157,7 @@ def test_task_view_prefers_newer_turn_outcome_over_old_metadata(tmp_path, monkey
 
 def test_task_list_reconciles_active_tasks_on_single_connection(tmp_path, monkeypatch):
     service = app(tmp_path)
+    monkeypatch.setattr("codex_axi.app._pid_alive", lambda _: False)
     for index in (1, 2):
         thread_id = f"thread-{index}"
         service.store.update_task(thread_id, kind="task", status="running", owner_pid=1)
@@ -440,6 +442,7 @@ def test_resume_applies_requested_runtime_policy(tmp_path):
 
 def test_reconciliation_uses_runtime_turn_status(tmp_path, monkeypatch):
     service = app(tmp_path)
+    monkeypatch.setattr("codex_axi.app._pid_alive", lambda _: False)
     service.store.update_worker(
         "thread-1", kind="worker", status="running", owner_pid=1, cwd="/repo"
     )

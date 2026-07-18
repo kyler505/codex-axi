@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .errors import AxiError, translate_runtime_error
-from .events import EventJournal, follow_events, read_event_page
+from .events import EventJournal, _pid_exists, follow_events, read_event_page
 from .locking import file_lock
 from .output import preview
 from .runtime import RuntimeCapabilities, open_connection, probe_runtime, read_thread_compat
@@ -949,11 +949,7 @@ def _worker_instructions(role: str | None) -> str:
 
 
 def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    return _pid_exists(pid)
 
 
 def _wait_pid_exit(pid: int, *, timeout: float) -> bool:
