@@ -74,12 +74,9 @@ class EventJournal:
     def is_writer_active(self) -> bool:
         try:
             writer_pid = int(self.writer_path.read_text())
-            os.kill(writer_pid, 0)
-            return True
-        except PermissionError:
-            return True
         except (OSError, ValueError):
             return False
+        return _pid_exists(writer_pid)
 
     def emit(self, event: Any) -> None:
         """Append the event's envelope; payloads are persisted only for
@@ -124,6 +121,34 @@ class EventJournal:
         except Exception:
             # Event capture is a passive tap. Runtime completion and control are authoritative.
             return
+
+
+def _pid_exists(pid: int) -> bool:
+    """Check whether a process is alive without signaling it.
+
+    ``os.kill(pid, 0)`` is a safe existence probe on POSIX, but on Windows
+    signal 0 is not special-cased and instead calls ``TerminateProcess``,
+    which kills the target (including a process checking its own pid).
+    """
+
+    if os.name == "nt":
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(  # type: ignore[attr-defined]
+            PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+        )
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)  # type: ignore[attr-defined]
+        return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def read_events(path: Path, *, since: int = 0, limit: int = 100) -> list[dict[str, Any]]:
