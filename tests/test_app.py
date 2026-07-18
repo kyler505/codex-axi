@@ -317,7 +317,7 @@ def test_active_turn_control_is_applied_by_owner(tmp_path):
         except Exception as error:  # pragma: no cover - surfaced via assertion below
             outcome["error"] = error
 
-    caller = threading.Thread(target=call_steer)
+    caller = threading.Thread(target=call_steer, daemon=True)
     caller.start()
     service._run_controlled("thread-1", turn)
     caller.join(timeout=10)
