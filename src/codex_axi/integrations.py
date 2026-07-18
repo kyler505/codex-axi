@@ -90,6 +90,8 @@ def setup_hooks(target: str, *, check: bool = False, remove: bool = False) -> di
     if remove:
         for item in selected:
             ADAPTERS[item].validate_remove(command)
+    elif not check and "opencode" in selected and current["opencode"] == "drifted":
+        ADAPTERS["opencode"].validate_remove(command)
     for item in selected:
         adapter = ADAPTERS[item]
         state = current[item]

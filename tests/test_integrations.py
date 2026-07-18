@@ -233,6 +233,27 @@ def test_all_targets_preflight_before_any_mutation(tmp_path, monkeypatch):
     assert not (tmp_path / ".claude" / "settings.json").exists()
 
 
+def test_all_targets_preflight_drifted_opencode_before_mutation(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(integrations, "_command", lambda: "codex-axi")
+    claude = tmp_path / ".claude" / "settings.json"
+    codex = tmp_path / ".codex" / "config.toml"
+    opencode = tmp_path / ".config" / "opencode" / "plugins" / "codex-axi.js"
+    claude.parent.mkdir(parents=True)
+    codex.parent.mkdir(parents=True)
+    opencode.parent.mkdir(parents=True)
+    claude.write_text('{"theme":"dark"}\n')
+    codex.write_text("[features]\nhooks = false\n")
+    opencode.write_text("// user-owned replacement\n")
+    before = {path: path.read_text() for path in (claude, codex, opencode)}
+
+    with pytest.raises(AxiError) as caught:
+        integrations.setup_hooks("all")
+
+    assert caught.value.code == "integration_drift"
+    assert {path: path.read_text() for path in before} == before
+
+
 def test_command_preserves_absolute_path_with_spaces_when_not_on_path(tmp_path, monkeypatch):
     executable = tmp_path / "bin with spaces" / "codex-axi"
     monkeypatch.setattr(integrations.sys, "argv", [str(executable)])
