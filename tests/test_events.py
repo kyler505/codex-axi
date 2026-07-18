@@ -1,4 +1,5 @@
 import json
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -40,7 +41,8 @@ def test_journal_captures_allowlisted_events_and_ignores_reasoning(tmp_path):
     assert records[-1]["payload"] == {"omitted": True}
     assert "private" not in journal.path.read_text()
     assert "unvetted-secret" not in journal.path.read_text()
-    assert journal.path.stat().st_mode & 0o777 == 0o600
+    if sys.platform != "win32":
+        assert journal.path.stat().st_mode & 0o777 == 0o600
 
 
 def test_journal_excludes_reasoning_items_from_generic_envelopes(tmp_path):
