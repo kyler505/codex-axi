@@ -227,7 +227,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev,mcp]'
 .venv/bin/python -m pytest
 .venv/bin/ruff check src tests
-PYTHONPATH=src .venv/bin/python -m codex_axi.skill --check
+.venv/bin/python -m codex_axi.skill --check
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidance and
