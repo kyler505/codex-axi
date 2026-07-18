@@ -14,6 +14,18 @@ from typing import Callable, Sequence
 from .errors import AxiError, translate_runtime_error
 
 SUPPORTED_CODEX = ">=0.144.0,<0.145.0"
+SUPPORTED_SDK = ">=0.144,<0.145"
+
+
+@dataclass(frozen=True)
+class Capability:
+    id: str
+    status: str
+    evidence: str
+    detail: str | None = None
+
+    def document(self) -> dict[str, object]:
+        return {key: value for key, value in asdict(self).items() if value is not None}
 
 
 @dataclass(frozen=True)
@@ -30,11 +42,124 @@ class RuntimeCapabilities:
     shared_transport_available: bool = False
     shared_transport_detail: str | None = None
 
-    def document(self) -> dict[str, object]:
-        return asdict(self)
+    def document(
+        self, *, full: bool = True, rate_limits_available: bool | None = None
+    ) -> dict[str, object]:
+        document = asdict(self)
+        document["execution_path"] = self.execution_path
+        capabilities = self.capability_report(rate_limits_available=rate_limits_available)
+        if full:
+            document["capabilities"] = [item.document() for item in capabilities]
+        else:
+            statuses = (
+                "supported",
+                "detected",
+                "degraded",
+                "unsupported",
+                "unknown",
+                "unavailable",
+            )
+            document["capability_summary"] = {
+                status: sum(item.status == status for item in capabilities)
+                for status in statuses
+                if any(item.status == status for item in capabilities)
+            }
+        document["unsupported_operations"] = [
+            item.id for item in capabilities if item.status == "unsupported"
+        ]
+        document["degraded_operations"] = [
+            item.id
+            for item in capabilities
+            if item.status in {"degraded", "unknown", "unavailable"}
+        ]
+        return document
+
+    @property
+    def execution_path(self) -> str:
+        sdk_supported = _sdk_in_supported_range(self.sdk_version)
+        if sdk_supported and self.shared_transport_available and self.daemon_state == "healthy":
+            return "managed-proxy"
+        if self.codex_path and sdk_supported:
+            return "direct-stdio"
+        return "unavailable"
+
+    def capability_report(
+        self, *, rate_limits_available: bool | None = None
+    ) -> tuple[Capability, ...]:
+        direct = bool(self.codex_path and _sdk_in_supported_range(self.sdk_version))
+        try:
+            from .integrations import integration_capability_statuses
+
+            integrations = integration_capability_statuses()
+        except Exception:
+            integrations = {name: "unknown" for name in ("claude", "codex", "opencode")}
+        rate_status = (
+            "unknown"
+            if rate_limits_available is None
+            else ("supported" if rate_limits_available else "unavailable")
+        )
+        return (
+            Capability(
+                "runtime.version_policy",
+                "supported" if _cli_in_supported_range(self.cli_version) else "degraded",
+                "version_policy",
+                f"tested range: {self.supported_codex}",
+            ),
+            Capability(
+                "runtime.sdk_policy",
+                "supported" if _sdk_in_supported_range(self.sdk_version) else "degraded",
+                "version_policy",
+                f"tested range: {SUPPORTED_SDK}",
+            ),
+            Capability("runtime.authenticated", _bool_status(self.authenticated), "probe"),
+            Capability("execution.direct_stdio", _status(direct), "sdk_surface"),
+            Capability(
+                "transport.daemon", _daemon_capability(self.daemon_state), "probe", self.detail
+            ),
+            Capability(
+                "transport.shared_attachment",
+                _status(self.shared_transport_available),
+                "sdk_surface",
+                self.shared_transport_detail,
+            ),
+            Capability("observation.thread_read", _status(direct), "sdk_surface"),
+            Capability("observation.rate_limits", rate_status, "probe"),
+            Capability("observation.turn_events", _status(direct), "sdk_surface"),
+            Capability("control.active_turn_owner", _status(direct), "sdk_surface"),
+            Capability("output.toon", "supported", "fixture"),
+            Capability("output.json", "supported", "fixture"),
+            Capability("output.ndjson_events", "supported", "fixture"),
+            Capability("integration.claude", integrations["claude"], "probe"),
+            Capability("integration.codex", integrations["codex"], "probe"),
+            Capability("integration.opencode", integrations["opencode"], "probe"),
+        )
 
 
 Run = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
+
+
+def _status(value: bool) -> str:
+    return "supported" if value else "unsupported"
+
+
+def _bool_status(value: bool | None) -> str:
+    return "unknown" if value is None else ("supported" if value else "unavailable")
+
+
+def _daemon_capability(state: str) -> str:
+    if state == "healthy":
+        return "supported"
+    return "unsupported" if state == "unavailable" else "degraded"
+
+
+def _cli_in_supported_range(value: str | None) -> bool:
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", value or "")
+    return bool(match and (int(match.group(1)), int(match.group(2))) == (0, 144))
+
+
+def _sdk_in_supported_range(value: str | None) -> bool:
+    match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", value or "")
+    return bool(match and (int(match.group(1)), int(match.group(2))) == (0, 144))
 
 
 def _run(args: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -66,18 +191,6 @@ def probe_runtime(
     authenticated = _login_status(codex_path, run)
     version = run((codex_path, "--version"))
     version_text = version.stdout.strip() if version.returncode == 0 else None
-    match = re.search(r"(\d+)\.(\d+)\.(\d+)", version_text or "")
-    if match and (int(match.group(1)), int(match.group(2))) != (0, 144):
-        return RuntimeCapabilities(
-            codex_path,
-            version_text,
-            False,
-            False,
-            "version-mismatched",
-            f"supported Codex range is {SUPPORTED_CODEX}",
-            sdk_version,
-            authenticated=authenticated,
-        )
     proxy = run((codex_path, "app-server", "proxy", "--help"))
     daemon = run((codex_path, "app-server", "daemon", "--help"))
     if not (proxy.returncode == 0 and daemon.returncode == 0):

@@ -6,46 +6,127 @@ import json
 import re
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .errors import AxiError
 
+ADAPTER_VERSIONS = {"claude": 1, "codex": 1, "opencode": 1}
 
-def setup_hooks(target: str) -> dict[str, Any]:
+
+@dataclass(frozen=True)
+class IntegrationAdapter:
+    target: str
+    contract_version: int
+
+    @property
+    def path(self) -> Path:
+        if self.target == "claude":
+            return Path.home() / ".claude" / "settings.json"
+        if self.target == "codex":
+            return Path.home() / ".codex" / "hooks.json"
+        return Path.home() / ".config" / "opencode" / "plugins" / "codex-axi.js"
+
+    def validate(self, command: str) -> str:
+        if self.target == "opencode":
+            content = _opencode_plugin(command)
+            return (
+                "current"
+                if self.path.exists() and self.path.read_text() == content
+                else ("drifted" if self.path.exists() else "missing")
+            )
+        status = _hook_status(self.path, command)
+        if self.target == "codex":
+            _validate_codex_config(Path.home() / ".codex" / "config.toml")
+        return status
+
+    def install(self, command: str) -> bool:
+        status = self.validate(command)
+        if self.target == "opencode":
+            if status == "drifted":
+                self.validate_remove(command)
+            return _write_if_changed(self.path, _opencode_plugin(command))
+        hook_changed = _merge_hook(self.path, "hooks", "SessionStart", command)
+        if self.target == "codex":
+            return _enable_codex_hooks(Path.home() / ".codex" / "config.toml") or hook_changed
+        return hook_changed
+
+    def validate_remove(self, command: str) -> None:
+        if self.target != "opencode" or not self.path.exists():
+            return
+        content = self.path.read_text()
+        match = re.search(r"(?m)^const command = (.+);$", content)
+        try:
+            installed_command = json.loads(match.group(1)) if match else None
+        except json.JSONDecodeError:
+            installed_command = None
+        if not isinstance(installed_command, str) or content != _opencode_plugin(installed_command):
+            raise AxiError(
+                "integration_drift",
+                f"Refusing to remove modified OpenCode plugin at {self.path}.",
+                "Review the file and remove it manually if those changes are no longer needed.",
+            )
+
+    def remove(self, command: str) -> bool:
+        self.validate_remove(command)
+        if self.target == "opencode":
+            if not self.path.exists():
+                return False
+            self.path.unlink()
+            return True
+        return _remove_hook(self.path, "hooks", "SessionStart")
+
+
+ADAPTERS = {name: IntegrationAdapter(name, version) for name, version in ADAPTER_VERSIONS.items()}
+
+
+def setup_hooks(target: str, *, check: bool = False, remove: bool = False) -> dict[str, Any]:
     command = _command()
     selected = ("claude", "codex", "opencode") if target == "all" else (target,)
     changed: list[str] = []
+    adapters: list[dict[str, Any]] = []
+    current = {item: ADAPTERS[item].validate(command) for item in selected}
+    if remove:
+        for item in selected:
+            ADAPTERS[item].validate_remove(command)
+    elif not check and "opencode" in selected and current["opencode"] == "drifted":
+        ADAPTERS["opencode"].validate_remove(command)
     for item in selected:
-        if item == "claude":
-            path = Path.home() / ".claude" / "settings.json"
-            if _merge_hook(path, "hooks", "SessionStart", command):
-                changed.append(item)
-        elif item == "codex":
-            path = Path.home() / ".codex" / "hooks.json"
-            hook_changed = _merge_hook(path, "hooks", "SessionStart", command)
-            config_changed = _enable_codex_hooks(Path.home() / ".codex" / "config.toml")
-            if hook_changed or config_changed:
+        adapter = ADAPTERS[item]
+        state = current[item]
+        if check:
+            pass
+        elif remove:
+            if adapter.remove(command):
                 changed.append(item)
         else:
-            path = Path.home() / ".config" / "opencode" / "plugins" / "codex-axi.js"
-            content = _opencode_plugin(command)
-            if _write_if_changed(path, content):
+            if adapter.install(command):
                 changed.append(item)
+        if not check and not remove:
+            state = "current"
+        adapters.append(
+            {
+                "target": item,
+                "contract_version": adapter.contract_version,
+                "status": "removed" if remove and item in changed else state,
+            }
+        )
     return {
         "setup": {
             "targets": list(selected),
             "changed": changed,
-            "status": "updated" if changed else "no_op",
+            "status": "checked" if check else ("updated" if changed else "no_op"),
+            "adapters": adapters,
         }
     }
 
 
-def _merge_hook(path: Path, root: str, event: str, command: str) -> bool:
+def _read_json_object(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text())
     except FileNotFoundError:
-        data = {}
+        return {}
     except json.JSONDecodeError as error:
         raise AxiError(
             "invalid_integration_config",
@@ -58,12 +139,94 @@ def _merge_hook(path: Path, root: str, event: str, command: str) -> bool:
             f"Expected a JSON object at {path}.",
             f"Repair `{path}` and rerun setup; the existing file was not changed.",
         )
+    return data
+
+
+def _hook_status(path: Path, command: str) -> str:
+    data = _read_json_object(path)
+    entries = _hook_entries(data, path, "hooks", "SessionStart") if data else []
+    managed = [entry for entry in entries if _managed_hook_command(entry) is not None]
+    if not managed:
+        return "missing"
+    current = any(_managed_hook_command(entry) == command for entry in managed)
+    return "current" if current else "drifted"
+
+
+def _merge_hook(path: Path, root: str, event: str, command: str) -> bool:
+    data = _read_json_object(path)
     hook = {"matcher": "", "hooks": [{"type": "command", "command": command}]}
-    existing = data.setdefault(root, {}).setdefault(event, [])
-    filtered = [entry for entry in existing if "codex-axi" not in json.dumps(entry)]
+    existing = _hook_entries(data, path, root, event, create=True)
+    filtered = [entry for entry in existing if _managed_hook_command(entry) is None]
     filtered.append(hook)
     data[root][event] = filtered
     return _write_if_changed(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
+def _remove_hook(path: Path, root: str, event: str) -> bool:
+    data = _read_json_object(path)
+    if not data:
+        return False
+    existing = _hook_entries(data, path, root, event)
+    filtered = [entry for entry in existing if _managed_hook_command(entry) is None]
+    if filtered == existing:
+        return False
+    data[root][event] = filtered
+    return _write_if_changed(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
+def _hook_entries(
+    data: dict[str, Any], path: Path, root: str, event: str, *, create: bool = False
+) -> list[Any]:
+    container = data.setdefault(root, {}) if create else data.get(root, {})
+    if not isinstance(container, dict):
+        raise AxiError(
+            "invalid_integration_config",
+            f"Expected `{root}` to be an object at {path}.",
+            f"Repair `{path}` and rerun setup; the existing file was not changed.",
+        )
+    entries = container.setdefault(event, []) if create else container.get(event, [])
+    if not isinstance(entries, list):
+        raise AxiError(
+            "invalid_integration_config",
+            f"Expected `{root}.{event}` to be an array at {path}.",
+            f"Repair `{path}` and rerun setup; the existing file was not changed.",
+        )
+    return entries
+
+
+def _managed_hook_command(entry: Any) -> str | None:
+    if not isinstance(entry, dict) or set(entry) != {"matcher", "hooks"}:
+        return None
+    hooks = entry.get("hooks")
+    if entry.get("matcher") != "" or not isinstance(hooks, list) or len(hooks) != 1:
+        return None
+    hook = hooks[0]
+    if not isinstance(hook, dict) or set(hook) != {"type", "command"}:
+        return None
+    command = hook.get("command")
+    if hook.get("type") != "command" or not isinstance(command, str):
+        return None
+    executable = Path(command).name.lower()
+    return command if executable in {"codex-axi", "codex-axi.exe"} else None
+
+
+def integration_capability_statuses() -> dict[str, str]:
+    """Return read-only host adapter status without making doctor fail on user config drift."""
+
+    command = _command()
+    statuses: dict[str, str] = {}
+    for name, adapter in ADAPTERS.items():
+        try:
+            state = adapter.validate(command)
+        except (AxiError, OSError):
+            statuses[name] = "degraded"
+        else:
+            statuses[name] = {
+                "current": "supported",
+                "drifted": "degraded",
+                "missing": "unknown",
+            }[state]
+    return statuses
 
 
 def _command() -> str:
@@ -88,19 +251,55 @@ def _enable_codex_hooks(path: Path) -> bool:
         content = path.read_text()
     except FileNotFoundError:
         content = ""
-    if re.search(r"(?m)^hooks[ \t]*=[ \t]*true[ \t]*$", content):
+    if content:
+        _parse_toml(path, content)
+    section = re.search(r"(?m)^\[features\][ \t]*(?:#.*)?$", content)
+    section_end = (
+        re.search(r"(?m)^\[[^\n]+\][ \t]*(?:#.*)?$", content[section.end() :])
+        if section
+        else None
+    )
+    start = section.end() if section else 0
+    end = start + section_end.start() if section and section_end else len(content)
+    features = content[start:end] if section else ""
+    if re.search(r"(?m)^hooks[ \t]*=[ \t]*true[ \t]*(?:#.*)?$", features):
         return False
-    disabled = re.search(r"(?m)^hooks[ \t]*=[ \t]*false[ \t]*$", content)
+    disabled = re.search(r"(?m)^hooks[ \t]*=[ \t]*false[ \t]*(?:#.*)?$", features)
     if disabled:
-        content = content[: disabled.start()] + "hooks = true" + content[disabled.end() :]
+        absolute_start = start + disabled.start()
+        absolute_end = start + disabled.end()
+        content = content[:absolute_start] + "hooks = true" + content[absolute_end:]
         return _write_if_changed(path, content)
-    match = re.search(r"(?m)^\[features\]\s*$", content)
-    if match:
-        insert = match.end()
+    if section:
+        insert = section.end()
         content = content[:insert] + "\nhooks = true" + content[insert:]
     else:
-        content = content.rstrip() + "\n\n[features]\nhooks = true\n"
+        prefix = content.rstrip()
+        content = (prefix + "\n\n" if prefix else "") + "[features]\nhooks = true\n"
     return _write_if_changed(path, content)
+
+
+def _validate_codex_config(path: Path) -> None:
+    try:
+        content = path.read_text()
+    except FileNotFoundError:
+        return
+    _parse_toml(path, content)
+
+
+def _parse_toml(path: Path, content: str) -> None:
+    try:
+        try:
+            import tomllib
+        except ImportError:  # pragma: no cover - Python 3.10
+            import tomli as tomllib
+        tomllib.loads(content)
+    except Exception as error:
+        raise AxiError(
+            "invalid_integration_config",
+            f"Cannot update malformed TOML configuration at {path}.",
+            f"Repair `{path}` and rerun setup; the existing file was not changed.",
+        ) from error
 
 
 def _opencode_plugin(command: str) -> str:

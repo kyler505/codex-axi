@@ -21,9 +21,10 @@ AXI-managed workers and native Codex subagents.
 ```sh
 .venv/bin/python -m pytest
 .venv/bin/ruff check src tests
-PYTHONPATH=src .venv/bin/python -m codex_axi.skill --check
+.venv/bin/python -m codex_axi.skill --check
 .venv/bin/python -m build
 .venv/bin/python -m twine check dist/*
+.venv/bin/python scripts/check_output_contracts.py
 ```
 
 Add focused tests with behavior changes. Keep stdout TOON-only and send

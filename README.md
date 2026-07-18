@@ -16,6 +16,11 @@ thread store.
 > **Alpha:** targets Codex `>=0.144.0,<0.145.0` and the beta
 > `openai-codex` SDK. Run `codex-axi doctor` after installation.
 
+Compatibility is reported per capability. A version range is a tested policy
+boundary, not proof that daemon attachment, rate limits, event observation, or
+cross-process control are all available. `doctor` reports the selected execution
+path and evidence for each capability independently.
+
 ## Quick start
 
 Install the Agent Skill with [npx skills](https://www.npmjs.com/package/skills):
@@ -73,6 +78,8 @@ OpenCode, or all three:
 
 ```sh
 codex-axi setup hooks --target all
+codex-axi setup hooks --target all --check
+codex-axi setup hooks --target all --remove
 ```
 
 Setup preserves unrelated configuration, repairs a moved executable path, and
@@ -155,10 +162,11 @@ event and its `sequence` can be supplied to `--since` when reconnecting:
 codex-axi worker events <thread> --follow --json
 ```
 
-The stream includes lifecycle, plan, command-output, file-change, MCP progress,
-warning, and agent-message events. Reasoning deltas are deliberately excluded.
-Because command and file-change payloads may contain sensitive data, journals
-should be enabled only when the caller intends to retain that local output.
+The stream includes lifecycle, user-message, plan, command-output, file-change,
+MCP progress, warning, and agent-message events. Reasoning deltas are deliberately
+excluded. Because prompts, model output, commands, and file changes may contain
+sensitive data, journals should be enabled only when the caller intends to retain
+that local output.
 Event capture is passive: a journal failure cannot fail a Codex turn or delay
 steer, interrupt, or timeout handling. `follow` remains the command for waiting
 on the final result; `events` is for incremental visibility.
@@ -189,7 +197,8 @@ threads and turns; `codex-axi` records only the worker metadata and active-turn
 coordination needed for deterministic control. Read the
 [architecture overview](docs/ARCHITECTURE.md) for the boundary and lifecycle,
 and [runtime compatibility notes](docs/IMPLEMENTATION.md) for version-specific
-behavior.
+behavior. The [compatibility policy](docs/COMPATIBILITY.md) documents the
+machine-readable matrix, evidence levels, output evolution, and platform paths.
 
 ## Optional MCP adapter
 
@@ -218,7 +227,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev,mcp]'
 .venv/bin/python -m pytest
 .venv/bin/ruff check src tests
-PYTHONPATH=src .venv/bin/python -m codex_axi.skill --check
+.venv/bin/python -m codex_axi.skill --check
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidance and

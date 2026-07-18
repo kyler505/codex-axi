@@ -28,6 +28,34 @@ def test_probe_reports_stopped_daemon_without_claiming_health():
     assert result.detail == "managed daemon is not running"
     assert "No such file" not in result.detail
     assert result.authenticated is True
+    report = {item.id: item for item in result.capability_report()}
+    assert report["execution.direct_stdio"].status == "supported"
+    assert report["transport.daemon"].status == "degraded"
+    assert result.document()["execution_path"] == "direct-stdio"
+    assert "transport.shared_attachment" in result.document()["unsupported_operations"]
+    assert "capabilities" not in result.document(full=False)
+    assert result.document(full=False)["capability_summary"]["supported"] >= 1
+
+
+def test_rate_limit_capability_uses_probe_result():
+    runtime = RuntimeCapabilities(
+        "/bin/codex", "codex-cli 0.144.3", True, True, "healthy", sdk_version="0.144.4"
+    )
+    available = {item.id: item for item in runtime.capability_report(rate_limits_available=True)}
+    unavailable = {item.id: item for item in runtime.capability_report(rate_limits_available=False)}
+    assert available["observation.rate_limits"].status == "supported"
+    assert unavailable["observation.rate_limits"].status == "unavailable"
+
+
+def test_sdk_outside_tested_range_degrades_sdk_surface_capabilities():
+    runtime = RuntimeCapabilities(
+        "/bin/codex", "codex-cli 0.144.3", True, False, "stopped", sdk_version="0.145.0"
+    )
+    report = {item.id: item for item in runtime.capability_report()}
+    assert runtime.execution_path == "unavailable"
+    assert report["runtime.sdk_policy"].status == "degraded"
+    assert report["execution.direct_stdio"].status == "unsupported"
+    assert report["observation.thread_read"].status == "unsupported"
 
 
 def test_probe_reports_unauthenticated_codex():
@@ -40,6 +68,35 @@ def test_probe_reports_unauthenticated_codex():
 
     result = probe_runtime(run=run, which=lambda _: "/bin/codex")
     assert result.authenticated is False
+
+
+def test_probe_reports_missing_cli_and_malformed_version():
+    missing = probe_runtime(which=lambda _: None)
+    assert missing.daemon_state == "unavailable"
+    assert missing.execution_path == "unavailable"
+
+    def run(args):
+        if args[-1] == "version":
+            return completed(args, 1, stderr="protocol failed")
+        if tuple(args[-2:]) in {("proxy", "--help"), ("daemon", "--help")}:
+            return completed(args, stdout="help")
+        return completed(args, stdout="not-a-semver")
+
+    malformed = probe_runtime(run=run, which=lambda _: "/bin/codex")
+    report = {item.id: item for item in malformed.capability_report()}
+    assert report["runtime.version_policy"].status == "degraded"
+
+
+def test_probe_reports_unhealthy_daemon_without_raw_detail():
+    def run(args):
+        if args[-1] == "version":
+            return completed(args, 1, stderr="secret protocol explosion")
+        return completed(args, stdout="codex-cli 0.144.3")
+
+    result = probe_runtime(run=run, which=lambda _: "/bin/codex")
+    assert result.daemon_state == "unhealthy"
+    assert result.detail == "managed daemon health check failed"
+    assert "secret" not in result.detail
 
 
 def test_rate_limits_use_sdk_connection_and_normalize_windows(monkeypatch):
@@ -143,6 +200,18 @@ def test_version_mismatch_is_distinct():
     result = probe_runtime(run=run, which=lambda _: "/bin/codex")
     assert result.daemon_state == "version-mismatched"
     assert result.detail == "daemon and app-server versions do not match"
+
+
+def test_newer_cli_is_probed_but_marked_outside_tested_policy():
+    def run(args):
+        if args[-1] == "version":
+            return completed(args, 1, stderr="failed to connect: No such file or directory")
+        return completed(args, stdout="codex-cli 0.145.0")
+
+    result = probe_runtime(run=run, which=lambda _: "/bin/codex")
+    report = {item.id: item for item in result.capability_report()}
+    assert report["runtime.version_policy"].status == "degraded"
+    assert report["execution.direct_stdio"].status == "supported"
 
 
 def test_starting_daemon_is_distinct():

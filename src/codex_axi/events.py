@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections import deque
 from collections.abc import Callable, Iterator
 from enum import Enum
 from pathlib import Path
@@ -74,32 +73,39 @@ class EventJournal:
     def is_writer_active(self) -> bool:
         try:
             writer_pid = int(self.writer_path.read_text())
-            os.kill(writer_pid, 0)
-            return True
-        except PermissionError:
-            return True
         except (OSError, ValueError):
             return False
+        return _pid_exists(writer_pid)
 
     def emit(self, event: Any) -> None:
-        """Append an allow-listed event; observability must never break a turn."""
+        """Append the event's envelope; payloads are persisted only for
+        methods in VISIBLE_EVENT_METHODS. Reasoning events are always
+        dropped. Any other method is recorded as an extension event with
+        its payload omitted, so unvetted payload content is never written
+        to the on-disk journal.
+        """
 
-        if event.method not in VISIBLE_EVENT_METHODS:
+        if "reasoning" in event.method.lower():
             return
         if event.method in ("item/started", "item/completed") and _is_reasoning_item(event.payload):
             return
         try:
             self._sequence += 1
-            payload = event.payload
-            if hasattr(payload, "model_dump"):
-                payload = payload.model_dump(mode="json", by_alias=True)
-            elif not isinstance(payload, dict):
-                payload = vars(payload)
+            is_extension = event.method not in VISIBLE_EVENT_METHODS
+            if is_extension:
+                payload: Any = {"omitted": True}
+            else:
+                payload = event.payload
+                if hasattr(payload, "model_dump"):
+                    payload = payload.model_dump(mode="json", by_alias=True)
+                elif not isinstance(payload, dict):
+                    payload = vars(payload)
             record = {
                 "schema_version": EVENT_SCHEMA_VERSION,
                 "sequence": self._sequence,
                 "method": event.method,
                 "payload": payload,
+                "extension": is_extension,
             }
             encoded = json.dumps(record, separators=(",", ":"), default=_json_value)
             if len(encoded.encode("utf-8")) > MAX_EVENT_BYTES:
@@ -116,6 +122,34 @@ class EventJournal:
             return
 
 
+def _pid_exists(pid: int) -> bool:
+    """Check whether a process is alive without signaling it.
+
+    ``os.kill(pid, 0)`` is a safe existence probe on POSIX, but on Windows
+    signal 0 is not special-cased and instead calls ``TerminateProcess``,
+    which kills the target (including a process checking its own pid).
+    """
+
+    if os.name == "nt":
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(  # type: ignore[attr-defined]
+            PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+        )
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)  # type: ignore[attr-defined]
+        return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def read_events(path: Path, *, since: int = 0, limit: int = 100) -> list[dict[str, Any]]:
     records, _ = read_event_page(path, since=since, limit=limit)
     return records
@@ -124,7 +158,7 @@ def read_events(path: Path, *, since: int = 0, limit: int = 100) -> list[dict[st
 def read_event_page(
     path: Path, *, since: int = 0, limit: int = 100
 ) -> tuple[list[dict[str, Any]], int]:
-    records: deque[dict[str, Any]] = deque(maxlen=limit)
+    records: list[dict[str, Any]] = []
     total = 0
     try:
         with path.open() as handle:
@@ -135,14 +169,15 @@ def read_event_page(
                 if record.get("sequence", 0) <= since:
                     continue
                 total += 1
-                records.append(record)
+                if len(records) < limit:
+                    records.append(record)
     except FileNotFoundError as error:
         raise AxiError(
             "events_unavailable",
             "The event journal is no longer available.",
             "Start a new turn with `--events` to capture live events.",
         ) from error
-    return list(records), total
+    return records, total
 
 
 def _decode_record(line: str) -> dict[str, Any]:
@@ -212,6 +247,9 @@ def follow_events(
                 handle.seek(position)
                 line = handle.readline()
                 if line:
+                    if not line.endswith("\n") and running():
+                        time.sleep(poll_interval)
+                        continue
                     position = handle.tell()
                     record = _decode_record(line)
                     if record.get("sequence", 0) > since:

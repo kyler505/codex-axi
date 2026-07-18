@@ -89,6 +89,12 @@ def test_foreground_commands_accept_timeout():
     assert steer.timeout == 2
 
 
+def test_doctor_full_controls_capability_detail():
+    parser = build_parser()
+    assert parser.parse_args(["doctor"]).full is False
+    assert parser.parse_args(["doctor", "--full"]).full is True
+
+
 def test_event_capture_and_follow_flags():
     parser = build_parser()
     start = parser.parse_args(["worker", "start", "--message", "x", "--events"])

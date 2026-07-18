@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import subprocess
@@ -15,7 +14,8 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .errors import AxiError, translate_runtime_error
-from .events import EventJournal, follow_events, read_event_page
+from .events import EventJournal, _pid_exists, follow_events, read_event_page
+from .locking import file_lock
 from .output import preview
 from .runtime import RuntimeCapabilities, open_connection, probe_runtime, read_thread_compat
 from .state import StateStore
@@ -520,7 +520,7 @@ class CodexAxi:
                 'Start a new worker with `codex-axi worker start --message "<task>"`.',
             )
         if self.store.active_turn(thread_id):
-            if options.get("events") and not worker.get("event_log"):
+            if options.get("events"):
                 raise AxiError(
                     "events_require_new_turn",
                     "Event capture cannot be enabled after a worker turn has started.",
@@ -949,11 +949,7 @@ def _worker_instructions(role: str | None) -> str:
 
 
 def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    return _pid_exists(pid)
 
 
 def _wait_pid_exit(pid: int, *, timeout: float) -> bool:
@@ -970,15 +966,7 @@ def _runner_lease_active(path: str | None) -> bool:
         return False
     try:
         with Path(path).open("a+") as lease:
-            acquired = False
-            try:
-                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                acquired = True
-            except BlockingIOError:
-                return True
-            finally:
-                if acquired:
-                    fcntl.flock(lease, fcntl.LOCK_UN)
+            with file_lock(lease, blocking=False) as acquired:
+                return not acquired
     except OSError:
         return False
-    return False

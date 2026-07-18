@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import tempfile
@@ -13,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import AxiError
+from .locking import file_lock
 
 
 class StateStore:
@@ -122,9 +122,8 @@ class StateStore:
         lock_path = self.path.with_suffix(self.path.suffix + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            yield self.read()
-            fcntl.flock(lock, fcntl.LOCK_UN)
+            with file_lock(lock):
+                yield self.read()
 
     def _write(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -133,6 +132,8 @@ class StateStore:
             with os.fdopen(fd, "w") as handle:
                 json.dump(data, handle, indent=2, sort_keys=True)
                 handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(name, self.path)
         finally:
             try:

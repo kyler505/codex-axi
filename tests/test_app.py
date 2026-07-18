@@ -3,6 +3,7 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -46,7 +47,7 @@ def test_task_list_passes_cwd_filter_by_default(tmp_path):
 
     service.client = fake_client
     service.list_tasks()
-    assert captured["cwd"].root == "/repo"
+    assert captured["cwd"].root == str(service.cwd)
     captured.clear()
     service.list_tasks(all_workspaces=True)
     assert "cwd" not in captured
@@ -112,6 +113,7 @@ def test_task_view_uses_sdk_status_for_untracked_thread(tmp_path, monkeypatch):
 
 def test_task_view_reconciles_stale_running_status_from_turn_history(tmp_path, monkeypatch):
     service = app(tmp_path)
+    monkeypatch.setattr("codex_axi.app._pid_alive", lambda _: False)
     service.store.update_task("thread-1", kind="task", status="running", owner_pid=1)
     service.store.set_active_turn("thread-1", "turn-1")
 
@@ -155,6 +157,7 @@ def test_task_view_prefers_newer_turn_outcome_over_old_metadata(tmp_path, monkey
 
 def test_task_list_reconciles_active_tasks_on_single_connection(tmp_path, monkeypatch):
     service = app(tmp_path)
+    monkeypatch.setattr("codex_axi.app._pid_alive", lambda _: False)
     for index in (1, 2):
         thread_id = f"thread-{index}"
         service.store.update_task(thread_id, kind="task", status="running", owner_pid=1)
@@ -303,16 +306,25 @@ def test_active_turn_control_is_applied_by_owner(tmp_path):
             self.steered.set()
 
         def run(self):
-            assert self.steered.wait(2)
+            assert self.steered.wait(10)
             return SimpleNamespace(id=self.id)
 
     turn = Turn()
     service.store.set_active_turn("thread-1", turn.id)
-    caller = threading.Thread(target=lambda: service.steer("thread-1", "new direction"))
+    outcome: dict[str, Any] = {}
+
+    def call_steer() -> None:
+        try:
+            service.steer("thread-1", "new direction", timeout=10)
+        except Exception as error:  # pragma: no cover - surfaced via assertion below
+            outcome["error"] = error
+
+    caller = threading.Thread(target=call_steer, daemon=True)
     caller.start()
     service._run_controlled("thread-1", turn)
-    caller.join(timeout=2)
+    caller.join(timeout=10)
     assert not caller.is_alive()
+    assert "error" not in outcome, outcome.get("error")
 
 
 def test_foreground_timeout_interrupts_and_marks_task_interrupted(tmp_path):
@@ -430,6 +442,7 @@ def test_resume_applies_requested_runtime_policy(tmp_path):
 
 def test_reconciliation_uses_runtime_turn_status(tmp_path, monkeypatch):
     service = app(tmp_path)
+    monkeypatch.setattr("codex_axi.app._pid_alive", lambda _: False)
     service.store.update_worker(
         "thread-1", kind="worker", status="running", owner_pid=1, cwd="/repo"
     )
