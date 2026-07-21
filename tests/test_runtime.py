@@ -20,7 +20,9 @@ def test_probe_reports_stopped_daemon_without_claiming_health():
             return completed(args, 1, stderr="failed to connect: No such file or directory")
         return completed(args, stdout="codex-cli 0.144.3")
 
-    result = probe_runtime(run=run, which=lambda _: "/bin/codex")
+    result = probe_runtime(
+        run=run, which=lambda _: "/bin/codex", sdk_version_provider=lambda _: "0.144.4"
+    )
     assert result.daemon_state == "stopped"
     assert result.proxy_available is True
     assert result.shared_transport_available is False

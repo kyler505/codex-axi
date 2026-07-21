@@ -7,7 +7,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -15,6 +14,7 @@ from typing import Any, Iterator
 
 from .errors import AxiError, translate_runtime_error
 from .events import EventJournal, _pid_exists, follow_events, read_event_page
+from .lifecycle import TurnExecutor
 from .locking import file_lock
 from .output import preview
 from .runtime import RuntimeCapabilities, open_connection, probe_runtime, read_thread_compat
@@ -594,7 +594,7 @@ class CodexAxi:
             self.list_tasks(limit=10) if self.capabilities.codex_path else {"count": 0, "tasks": []}
         )
         workers = self.list_workers()
-        return {
+        result = {
             "workspace": str(self.cwd),
             "runtime": {
                 "status": self.capabilities.daemon_state,
@@ -608,6 +608,16 @@ class CodexAxi:
             "tasks": tasks["tasks"],
             "workers": workers["workers"],
         }
+        retention = self.store.retention_summary()
+        if retention["warning"]:
+            result["retention"] = retention
+            result["help"] = ["codex-axi cleanup --dry-run"]
+        return result
+
+    def cleanup(self, *, retention_days: float = 30, dry_run: bool = False) -> dict[str, Any]:
+        return self.store.cleanup(
+            retention_days=retention_days, workspace=self.cwd, dry_run=dry_run
+        )
 
     def _active_turn(self, thread_id: str) -> str:
         turn_id = self.store.active_turn(thread_id)
@@ -703,66 +713,9 @@ class CodexAxi:
         timeout: float = 0,
         journal: EventJournal | None = None,
     ) -> Any:
-        stop = threading.Event()
-
-        def relay() -> None:
-            while not stop.wait(0.05):
-                for control in self.store.take_controls(thread_id):
-                    try:
-                        if control["action"] == "steer":
-                            turn.steer(control["message"])
-                        elif control["action"] == "interrupt":
-                            turn.interrupt()
-                        else:
-                            raise ValueError("unknown control action")
-                        self.store.finish_control(control["id"], status="applied")
-                    except Exception as error:
-                        self.store.finish_control(
-                            control["id"], status="rejected", error=type(error).__name__
-                        )
-
-        thread = threading.Thread(target=relay, name=f"codex-axi-control-{turn.id}", daemon=True)
-        thread.start()
-        completed = threading.Event()
-        outcome: dict[str, Any] = {}
-
-        def collect() -> None:
-            try:
-                if journal is None:
-                    outcome["result"] = self._collect_turn(thread_id, turn)
-                else:
-                    outcome["result"] = self._collect_turn(thread_id, turn, journal=journal)
-            except BaseException as error:
-                outcome["error"] = error
-            finally:
-                if journal is not None:
-                    journal.finish()
-                completed.set()
-
-        collector = threading.Thread(target=collect, name=f"codex-axi-turn-{turn.id}", daemon=True)
-        collector.start()
-        try:
-            if not completed.wait(timeout if timeout > 0 else None):
-                try:
-                    turn.interrupt()
-                except Exception as error:
-                    raise AxiError(
-                        "turn_timeout",
-                        f"Task {thread_id} exceeded {timeout:g} seconds and could not be "
-                        "interrupted.",
-                        f"Run `codex-axi task view {thread_id}` before retrying.",
-                    ) from error
-                raise AxiError(
-                    "turn_timeout",
-                    f"Task {thread_id} exceeded {timeout:g} seconds and was interrupted.",
-                    f"Run `codex-axi task view {thread_id}` before retrying.",
-                )
-            if "error" in outcome:
-                raise outcome["error"]
-            return outcome["result"]
-        finally:
-            stop.set()
-            thread.join(timeout=1)
+        return TurnExecutor(self.store, self._collect_turn).run(
+            thread_id, turn, timeout=timeout, journal=journal
+        )
 
     def _collect_turn(
         self, thread_id: str, turn: Any, *, journal: EventJournal | None = None

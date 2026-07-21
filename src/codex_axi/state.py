@@ -14,6 +14,8 @@ from typing import Any
 from .errors import AxiError
 from .locking import file_lock
 
+DEFAULT_RETENTION_DAYS = 30
+
 
 class StateStore:
     def __init__(self, path: Path | None = None) -> None:
@@ -62,7 +64,7 @@ class StateStore:
         control_id = str(uuid.uuid4())
         with self._locked() as data:
             data.setdefault("controls", {}).setdefault(thread_id, []).append(
-                {"id": control_id, "action": action, "message": message}
+                {"id": control_id, "action": action, "message": message, "created_at": time.time()}
             )
             self._write(data)
         return control_id
@@ -74,11 +76,20 @@ class StateStore:
                 self._write(data)
             return controls
 
-    def finish_control(self, control_id: str, *, status: str, error: str | None = None) -> None:
+    def finish_control(
+        self,
+        control_id: str,
+        *,
+        status: str,
+        error: str | None = None,
+        thread_id: str | None = None,
+    ) -> None:
         with self._locked() as data:
             data.setdefault("control_results", {})[control_id] = {
                 "status": status,
                 "error": error,
+                "created_at": time.time(),
+                "thread_id": thread_id,
             }
             self._write(data)
 
@@ -117,6 +128,103 @@ class StateStore:
                 self._write(data)
             return removed
 
+    def retention_summary(self, *, warning_threshold: int = 100) -> dict[str, Any]:
+        data = self.read()
+        controls = sum(len(items) for items in data.get("controls", {}).values())
+        results = len(data.get("control_results", {}))
+        journals = sum(
+            bool(item.get("event_log"))
+            for group in ("tasks", "workers")
+            for item in data.get(group, {}).values()
+        )
+        retained = controls + results + journals
+        return {
+            "retained": retained,
+            "controls": controls,
+            "control_results": results,
+            "event_journals": journals,
+            "warning": retained >= warning_threshold,
+        }
+
+    def cleanup(
+        self,
+        *,
+        retention_days: float = DEFAULT_RETENTION_DAYS,
+        workspace: Path | None = None,
+        dry_run: bool = False,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        cutoff = (time.time() if now is None else now) - retention_days * 86400
+        workspace = workspace.resolve() if workspace else None
+        removed = {"controls": 0, "control_results": 0, "event_journals": 0, "metadata": 0}
+        with self._locked() as data:
+            active = data.get("active_turns", {})
+            scoped_threads = {
+                thread_id
+                for group in ("tasks", "workers")
+                for thread_id, item in data.get(group, {}).items()
+                if workspace is None or Path(item.get("cwd", "")).resolve() == workspace
+            }
+            for thread_id, controls in list(data.get("controls", {}).items()):
+                if thread_id not in scoped_threads or thread_id in active:
+                    continue
+                kept = [item for item in controls if item.get("created_at", cutoff + 1) >= cutoff]
+                removed["controls"] += len(controls) - len(kept)
+                if not dry_run:
+                    if kept:
+                        data["controls"][thread_id] = kept
+                    else:
+                        data["controls"].pop(thread_id, None)
+            for control_id, result in list(data.get("control_results", {}).items()):
+                result_thread = result.get("thread_id")
+                if workspace is not None and result_thread not in scoped_threads:
+                    continue
+                if result.get("created_at", cutoff + 1) < cutoff:
+                    removed["control_results"] += 1
+                    if not dry_run:
+                        data["control_results"].pop(control_id, None)
+            for group in ("tasks", "workers"):
+                for thread_id, item in list(data.get(group, {}).items()):
+                    if thread_id not in scoped_threads or thread_id in active:
+                        continue
+                    event_path = item.get("event_log")
+                    if event_path:
+                        path = Path(event_path)
+                        try:
+                            stale = path.stat().st_mtime < cutoff
+                        except OSError:
+                            stale = True
+                        from .events import EventJournal
+
+                        journal = EventJournal(path)
+                        if stale and not journal.is_writer_active():
+                            removed["event_journals"] += int(path.exists())
+                            removed["metadata"] += int(not path.exists())
+                            if not dry_run:
+                                path.unlink(missing_ok=True)
+                                journal.finished_path.unlink(missing_ok=True)
+                                journal.writer_path.unlink(missing_ok=True)
+                                item["event_log"] = None
+                                item["event_turn_id"] = None
+            if not dry_run and any(removed.values()):
+                self._write(data)
+        return {
+            "cleanup": {
+                "dry_run": dry_run,
+                "retention_days": retention_days,
+                "workspace": str(workspace) if workspace else None,
+                "removed": removed,
+                "total": sum(removed.values()),
+                "status": (
+                    "no_op"
+                    if not any(removed.values())
+                    else "would_remove"
+                    if dry_run
+                    else "removed"
+                ),
+            }
+        }
+
     @contextmanager
     def _locked(self):
         lock_path = self.path.with_suffix(self.path.suffix + ".lock")
@@ -135,6 +243,8 @@ class StateStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(name, self.path)
+            if os.name != "nt":
+                os.chmod(self.path, 0o600)
         finally:
             try:
                 os.unlink(name)

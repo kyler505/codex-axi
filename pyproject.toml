@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling>=1.25"]
+requires = ["hatchling>=1.25", "hatch-vcs>=0.4"]
 build-backend = "hatchling.build"
 
 [project]
 name = "codex-axi"
-version = "0.1.0"
+dynamic = ["version"]
 description = "AXI-compliant control surface for Codex threads"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -46,6 +46,12 @@ codex-axi = "codex_axi.cli:main"
 
 [tool.hatch.build.targets.sdist]
 exclude = ["/AGENTS.md"]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+local_scheme = "no-local-version"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

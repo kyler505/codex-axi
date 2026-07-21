@@ -178,9 +178,10 @@ def _login_status(codex_path: str, run: Run) -> bool | None:
 def probe_runtime(
     run: Run = _run,
     which: Callable[[str], str | None] = shutil.which,
+    sdk_version_provider: Callable[[str], str] = package_version,
 ) -> RuntimeCapabilities:
     try:
-        sdk_version = package_version("openai-codex")
+        sdk_version = sdk_version_provider("openai-codex")
     except PackageNotFoundError:
         sdk_version = None
     codex_path = which("codex")

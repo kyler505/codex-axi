@@ -137,6 +137,7 @@ new approval request.
 | `doctor` | Probe runtime compatibility, authentication, and current usage windows. |
 | `daemon status` | Probe managed-daemon compatibility. |
 | `setup hooks` | Install opt-in Claude Code, Codex, or OpenCode session hooks. |
+| `cleanup` | Preview or prune expired local controls and event journals. |
 | `mcp-server` | Run the optional thin MCP adapter. |
 
 Use `codex-axi <command> --help` for supported flags, defaults, and examples.
@@ -167,6 +168,9 @@ MCP progress, warning, and agent-message events. Reasoning deltas are deliberate
 excluded. Because prompts, model output, commands, and file changes may contain
 sensitive data, journals should be enabled only when the caller intends to retain
 that local output.
+Local controls, results, and journals use a conservative 30-day retention default.
+Preview cleanup with `codex-axi cleanup --dry-run`; cleanup is workspace-scoped,
+idempotent, and never removes an active turn or journal with a live writer.
 Event capture is passive: a journal failure cannot fail a Codex turn or delay
 steer, interrupt, or timeout handling. `follow` remains the command for waiting
 on the final result; `events` is for incremental visibility.
@@ -206,6 +210,14 @@ The CLI is the primary interface. If an MCP host needs it, install the optional
 adapter; it exposes the same application behavior rather than a second
 orchestration model.
 
+MCP tools map directly to `task` start/list/view/resume/follow/steer/interrupt/
+archive/events, `worker` start/list/view/send/follow/interrupt/close/events,
+native-agent list/view, `delegate`, and `cleanup`. Execution tools expose the
+same sandbox, approval, model, effort, timeout, background, detail, and event
+capture options with the same conservative defaults. MCP returns bounded event
+snapshots; continuous framing remains explicitly available only through CLI
+`events --follow --json`.
+
 ```sh
 pipx install 'codex-axi[mcp] @ git+https://github.com/kyler505/codex-axi.git'
 codex-axi mcp-server
@@ -231,4 +243,7 @@ python3 -m venv .venv
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidance and
-[SECURITY.md](SECURITY.md) for private vulnerability reporting. MIT licensed.
+[SECURITY.md](SECURITY.md) for private vulnerability reporting. Release history
+is recorded in the [changelog](CHANGELOG.md), and maintainers can follow the
+[release guide](docs/RELEASING.md) for tagged, reproducible PyPI publication.
+MIT licensed.

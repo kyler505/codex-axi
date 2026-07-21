@@ -85,6 +85,11 @@ appends an allow-listed subset to a user-private journal. Other CLI processes
 read or follow the journal; they never attach a second consumer to the SDK
 stream. Journal failures do not alter turn completion or the control relay.
 
+Internally, `CodexAxi` remains the public application facade used by CLI and MCP
+callers. A focused turn executor owns collection, timeout, journal finalization,
+and the filesystem control relay; local state remains the only coordination
+authority and no additional service or transport layer is introduced.
+
 ## Agent-facing contract
 
 The command line follows AXI conventions:

@@ -18,3 +18,8 @@ codex-axi delegates to the installed Codex runtime and preserves its sandbox
 and approval modes. It does not make repository instructions, hooks, MCP tools,
 prompts, or web content trusted. Review requested permissions and use the least
 privileged sandbox suitable for the task.
+
+Opt-in event journals may contain prompts, model output, commands, and file-change
+details. They and control metadata are stored in user-private local state. Use
+`codex-axi cleanup --dry-run` to inspect expired workspace state and `codex-axi
+cleanup` to prune it; active turns and journals with live writers are preserved.

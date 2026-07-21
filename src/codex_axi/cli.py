@@ -114,6 +114,9 @@ def build_parser() -> Parser:
     setup.add_argument("--target", choices=("claude", "codex", "opencode", "all"), default="all")
     setup.add_argument("--check", action="store_true", help="validate without changing files")
     setup.add_argument("--remove", action="store_true", help="remove only codex-axi entries")
+    cleanup = subs.add_parser("cleanup", help="prune expired local controls and event journals")
+    cleanup.add_argument("--retention-days", type=_positive_timeout, default=30.0)
+    cleanup.add_argument("--dry-run", action="store_true", help="report without deleting files")
     subs.add_parser("mcp-server", help="run the thin MCP adapter")
     return parser
 
@@ -229,6 +232,8 @@ def dispatch(args: argparse.Namespace) -> dict[str, Any]:
             "help": COMMANDS,
         }
     options = _options(args)
+    if args.command == "cleanup":
+        return app.cleanup(retention_days=args.retention_days, dry_run=args.dry_run)
     if args.command == "task":
         return _task(app, args, options)
     if args.command == "worker":
@@ -439,6 +444,7 @@ def _examples(prog: str) -> list[str]:
             "codex-axi setup hooks --target all",
             "codex-axi setup hooks --target opencode",
         ],
+        "cleanup": ["codex-axi cleanup --dry-run", "codex-axi cleanup --retention-days 30"],
     }
     suffix = " ".join(prog.split()[1:])
     return examples.get(suffix, [prog, f"{prog} --help"])
